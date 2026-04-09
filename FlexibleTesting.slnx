@@ -1,3 +1,6 @@
 <Solution>
   <Project Path="FlexibleTesting/FlexibleTesting.csproj" />
+  <Project Path="Legacy.App/Legacy.App.csproj" />
+  <Project Path="Legacy.Tests.Generators/Legacy.Tests.Generators.csproj" />
+  <Project Path="Legacy.Tests/Legacy.Tests.csproj" />
 </Solution>
