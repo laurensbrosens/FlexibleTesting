@@ -1,3 +1,12 @@
+Somewhat relevant example:
+https://github.com/dotnet/roslyn/blob/main/docs/features/incremental-generators.cookbook.md#unit-testing-of-generators
+Use AddEmbeddedAttributeDefinition to prevent problems with duplicate attribute names
+
+If found no examples of creating a builder to specify on how a generator works. I wonder if it is performant to find a 
+class file based on class type? The cookbook specifically says that using an interface as marker instead of an attribute
+is significantly less efficient and considered bad practice (for source generators).
+
+
 ## Goal
 
 Make extremely large legacy C# code unit-testable (including WPF ViewModels) without heavy refactors, by compiling a “testable copy” and applying controlled rewrites (dependencies, inheritance) via a source generator (+ analyzer). The developer writes normal unit tests (xUnit/NUnit) and can still use NSubstitute/FluentValidation.
