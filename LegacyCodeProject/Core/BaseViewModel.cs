@@ -19,6 +19,7 @@ public class BaseViewModel : INotifyPropertyChanged
         set
         {
             field = value;
+            LoadEvent?.Invoke(this, EventArgs.Empty);
             OnPropertyChanged();
         }
     }
