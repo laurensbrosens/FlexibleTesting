@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace LegacyTestability;
+namespace Legacy.Tests.Fakes;
 
 public abstract class NotifyBase : INotifyPropertyChanged
 {

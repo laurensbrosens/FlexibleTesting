@@ -1,7 +1,7 @@
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace LegacyTestability;
+namespace Legacy.Tests.Fakes;
 
 public abstract class HeavyBaseViewModel_Fake : NotifyBase
 {
