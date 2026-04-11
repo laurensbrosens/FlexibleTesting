@@ -1,30 +1,12 @@
-﻿using LegacyCodeProject.Core;
-using LegacyCodeProject.Viewmodels;
+﻿using LegacyCodeProject.Viewmodels;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 
 namespace LegacyCodeProjectTests;
 
 [GeneratorInstructions]
-public class UserViewModelBuilder//(SomeDataObject someDataObject) : UserViewModel(someDataObject), IGeneratorInstructions
+public class UserViewModelBuilder : IGeneratorInstructions
 {
-    /*
-    public class Accessor(SomeDataObject someDataObject) : UserViewModel(someDataObject)
-    {
-        public static string MethodProvider()
-        {
-            return nameof(OnLoad);
-        }
-
-        /*public static void MakePublic<TTarget, TDelegate>(Expression<TDelegate> selector)
-            where TDelegate : Delegate { }*/
-
-        public static Expression<TDelegate> MakePublic<TTarget, TDelegate>()
-            where TDelegate : Delegate { 
-            return (sender, e) => ((UserViewModelBuilder)null!).OnLoad(sender, e);
-        }
-    }*/
-
     public static void Configure()
     {
         Overwrites.ForClass<UserViewModel>();
@@ -53,41 +35,22 @@ public class UserViewModelBuilder//(SomeDataObject someDataObject) : UserViewMod
 
         Overwrites.MakePublic<UserViewModel, Action<UserViewModel, object?, EventArgs>>((vm, sender, e) => UserViewModelAccessors.OnLoad(vm, sender, e));
     }
+
     internal static class UserViewModelAccessors
     {
         // Name omitted: by default, the accessor method name "OnLoad"
         // is used as the target member name.
         [UnsafeAccessor(UnsafeAccessorKind.Method)]
-        internal static extern void OnLoad(UserViewModel instance, object? sender, EventArgs e);
+        internal static extern void OnLoad(UserViewModel @this, object? sender, EventArgs e);
     }
 }
 
-
-
-internal class FakeBaseViewModel { }
-
-internal class GeneratorInstructionsAttribute : Attribute { }
-
-public interface IGeneratorInstructions { }
-
-public static class TestClock
-{
-    public static DateTime Now => new DateTime(2000, 1, 1);
-}
-
-public static class TestFile
-{
-    public static string ReadAllText(string path) => "Test content";
-}
-
-public static class TestEmail
-{
-    public static bool IsValidEmail(string email) => true;
-}
-
-public static class Overwrites
+public class Overwrites
 {
     public static void Replace<TDelegate>(Expression<TDelegate> target, Expression<TDelegate> replacement)
+        where TDelegate : Delegate { }
+
+    public static void MakePublic<TTarget, TDelegate>(Expression<TDelegate> selector)
         where TDelegate : Delegate { }
 
     // Etc. for the others
@@ -115,11 +78,29 @@ public static class Overwrites
         throw new NotImplementedException();
     }
     */
-    public static void MakePublic<TTarget, TDelegate>(Expression<TDelegate> selector)
-        where TDelegate : Delegate { }
-
-    internal static void RedirectNew<T1, T2>()
+    public static void RedirectNew<T1, T2>()
     {
         throw new NotImplementedException();
     }
+}
+
+public class FakeBaseViewModel { }
+
+public class GeneratorInstructionsAttribute : Attribute { }
+
+public interface IGeneratorInstructions { }
+
+public static class TestClock
+{
+    public static DateTime Now => new DateTime(2000, 1, 1);
+}
+
+public static class TestFile
+{
+    public static string ReadAllText(string path) => "Test content";
+}
+
+public static class TestEmail
+{
+    public static bool IsValidEmail(string email) => true;
 }
