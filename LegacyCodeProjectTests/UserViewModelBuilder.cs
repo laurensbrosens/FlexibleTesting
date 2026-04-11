@@ -11,11 +11,11 @@ public class UserViewModelBuilder : IGeneratorInstructions
     {
         Overwrites.ForClass<UserViewModel>();
 
-        Overwrites.Replace<Func<DateTime>>(() => DateTime.Now, () => TestClock.Now);
+        Overwrites.ReplaceProperty<Func<DateTime>>(() => DateTime.Now, () => TestClock.Now);
 
-        Overwrites.Replace<Func<string, string>>(path => File.ReadAllText(path), path => TestFile.ReadAllText(path));
+        Overwrites.Replace(File.ReadAllText, TestFile.ReadAllText);
 
-        Overwrites.Replace<Func<string, bool>>(s => s.IsValidEmail(), s => TestEmail.IsValidEmail(s));
+        Overwrites.Replace(s => s.IsValidEmail(), TestEmail.IsValidEmail);
 
         Overwrites.RedirectNew<SomeService, Func<string, SomeService>>(); // To overwrite things like "new SomeService" that has side-effects in it's constructor, could be combined with Mockable?
 
@@ -24,16 +24,22 @@ public class UserViewModelBuilder : IGeneratorInstructions
         Overwrites.InheritFrom<FakeBaseViewModel>(); // Developer provided fake base, usefull for base classes that are used a lot
 
         // Or make it mockable:
-        Overwrites.Mockable<Func<string, string>>(path => File.ReadAllText(path));
+        Overwrites.Mockable<Func<string, string>>(File.ReadAllText);
 
-        Overwrites.Mockable<Func<DateTime>>(() => DateTime.Now);
+        Overwrites.Mockable(() => DateTime.Now);
 
-        Overwrites.MakePublic(nameof(UserViewModelBuilder.OnLoad));
-        Overwrites.MakePublic(Accessor.MethodProvider());
+        Overwrites.MakePublic(nameof(IShadow.OnLoad)); // Not great
+        Overwrites.MakePublic("OnLoad"); // Ew
+        Overwrites.MakePublic<UserViewModel, Action<UserViewModel, object?, EventArgs>>((vm, sender, e) => UserViewModelAccessors.OnLoad(vm, sender, e)); // Most accurate but very difficult
+        Overwrites.MakePublic(UserViewModelAccessors.OnLoad); // Slightly better than above
 
         //[UnsafeAccessorType(nameof(UserViewModel))]
+        // Apparantly I could use https://github.com/pardeike/Harmony as well (runtime method monkey patching)
+    }
 
-        Overwrites.MakePublic<UserViewModel, Action<UserViewModel, object?, EventArgs>>((vm, sender, e) => UserViewModelAccessors.OnLoad(vm, sender, e));
+    private interface IShadow
+    {
+        public void OnLoad(object? sender, EventArgs e);
     }
 
     internal static class UserViewModelAccessors
@@ -47,10 +53,19 @@ public class UserViewModelBuilder : IGeneratorInstructions
 
 public class Overwrites
 {
-    public static void Replace<TDelegate>(Expression<TDelegate> target, Expression<TDelegate> replacement)
+    public static void ReplaceProperty<TDelegate>(Expression<TDelegate> target, Expression<TDelegate> replacement)
+        where TDelegate : Delegate { }
+
+    public static void Replace<TDelegate>(TDelegate target, TDelegate replacement)
         where TDelegate : Delegate { }
 
     public static void MakePublic<TTarget, TDelegate>(Expression<TDelegate> selector)
+        where TDelegate : Delegate { }
+
+    public static void MakePublic<TDelegate>(TDelegate accessor)
+        where TDelegate : Delegate { }
+
+    public static void Mockable<TDelegate>(TDelegate value)
         where TDelegate : Delegate { }
 
     // Etc. for the others
@@ -72,16 +87,15 @@ public class Overwrites
         throw new NotImplementedException();
     }
 
-    /*
-    internal static void Mockable<T>(Expression<TDelegate> value) where TDelegate : Delegate
-    {
-        throw new NotImplementedException();
-    }
-    */
     public static void RedirectNew<T1, T2>()
     {
         throw new NotImplementedException();
     }
+}
+
+public static class StringExtensions
+{
+    public static bool IsValidEmail(this string s) => TestEmail.IsValidEmail(s);
 }
 
 public class FakeBaseViewModel { }
