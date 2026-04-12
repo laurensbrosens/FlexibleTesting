@@ -4,8 +4,8 @@ using LegacyCodeProject.Viewmodels;
 
 namespace LegacyCodeProjectTests;
 
-[GeneratorInstructions]
-public class UserViewModelBuilder : IGeneratorInstructions
+[GeneratorInstructions(typeof(IGeneratorInstructions))]
+public partial class UserViewModelBuilder
 {
     public void Configure()
     {
@@ -41,8 +41,6 @@ public static class StringExtensions
 }
 
 public class FakeBaseViewModel { }
-
-public class GeneratorInstructionsAttribute : Attribute { }
 
 public static class TestClock
 {

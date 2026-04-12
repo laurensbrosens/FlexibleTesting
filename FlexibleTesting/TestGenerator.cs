@@ -86,7 +86,7 @@ internal sealed class {{AttributeClassName}} : Attribute
         );
     }
 
-    private static EquatableList<InterfaceModel> GetInterfaceModels(AttributeData attribute)
+    public static EquatableList<InterfaceModel> GetInterfaceModels(AttributeData attribute)
     {
         EquatableList<InterfaceModel> ret = [];
 
@@ -120,11 +120,11 @@ internal sealed class {{AttributeClassName}} : Attribute
         return ret;
     }
 
-    private record ClassModel(string Name, string NameSpace, EquatableList<InterfaceModel> Interfaces);
+    public record ClassModel(string Name, string NameSpace, EquatableList<InterfaceModel> Interfaces);
 
-    private record InterfaceModel(string FullyQualifiedName, EquatableList<string> Properties);
+    public record InterfaceModel(string FullyQualifiedName, EquatableList<string> Properties);
 
-    private class EquatableList<T> : List<T>, IEquatable<EquatableList<T>>
+    public class EquatableList<T> : List<T>, IEquatable<EquatableList<T>>
     {
         public bool Equals(EquatableList<T>? other)
         {
