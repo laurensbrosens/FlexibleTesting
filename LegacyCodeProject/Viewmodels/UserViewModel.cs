@@ -11,6 +11,8 @@ public class UserViewModel : BaseViewModel
     {
         Name = "Default";
         DateTime = DateTime.Now;
+        _userService = new UserService();
+
     }
 
     public string Name
@@ -30,6 +32,8 @@ public class UserViewModel : BaseViewModel
         base.OnLoad(sender, e);
         Name = "Test";
     }
+
+    private UserService _userService; // This is the kind of thing I want to avoid in tests, maybe the source generator can move this to the generated class and make it mockable?
 }
 
 // Example of what the generated class would look like:
@@ -48,6 +52,7 @@ public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
         _dependencies = dependencies;
         Name = "Default";
         DateTime = _dependencies.Now();
+        _userService = _dependencies.UserService;
     }
 
     public string Name
@@ -68,10 +73,12 @@ public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
         Name = "Test";
     }
 
+    private IUserService _userService;
+
     public interface IAutoDependencies
     {
         Func<DateTime> Now { get; }
-
+        IUserService UserService { get; }
         void OnPropertyChanged([CallerMemberName] string propertyName = null!); // Is this possible for a sourcegenerator?
     }
 
@@ -79,6 +86,10 @@ public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
     {
         void OnLoad(object? sender, EventArgs e);
     }
+}
+
+public interface IUserService
+{
 }
 
 public class BaseViewModel_g(SomeDataObject someDataObject, IAutoDependenciesBase dependencies)

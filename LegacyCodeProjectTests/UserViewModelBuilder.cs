@@ -1,4 +1,5 @@
-﻿using LegacyCodeProject.Viewmodels;
+﻿using LegacyCodeProject.Core;
+using LegacyCodeProject.Viewmodels;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 
@@ -7,9 +8,11 @@ namespace LegacyCodeProjectTests;
 [GeneratorInstructions]
 public class UserViewModelBuilder : IGeneratorInstructions
 {
-    public static void Configure()
+    public void Configure()
     {
         Overwrites.ForClass<UserViewModel>();
+
+        Overwrites.Include<BaseBuilder>();
 
         Overwrites.ReplaceProperty<Func<DateTime>>(() => DateTime.Now, () => TestClock.Now);
 
@@ -17,7 +20,7 @@ public class UserViewModelBuilder : IGeneratorInstructions
 
         Overwrites.Replace(s => s.IsValidEmail(), TestEmail.IsValidEmail);
 
-        Overwrites.RedirectNew<SomeService, Func<string, SomeService>>(); // To overwrite things like "new SomeService" that has side-effects in it's constructor, could be combined with Mockable?
+        Overwrites.Mock<UserService>(); // Automatically create a fake implementation using an interface, UserService => IUserService, and redirect calls to the fake
 
         Overwrites.MockInheritance(); // Automatically create a fake base class if needed, could be combined with InheritFrom?
 
@@ -28,7 +31,10 @@ public class UserViewModelBuilder : IGeneratorInstructions
 
         Overwrites.Mockable(() => DateTime.Now);
 
+        // Testing some different designs
         Overwrites.MakePublic(nameof(IShadow.OnLoad)); // Not great
+        //Overwrites.MakePublic(IShadow.OnLoad); // A bit better, at least the overload is resolved by the compiler, but still not great
+        Overwrites.MakePublic<IShadow, Action<object?, EventArgs>>(x => x.OnLoad); // Better, show signature. Generator could notify/error if no matches found
         Overwrites.MakePublic("OnLoad"); // Ew
         Overwrites.MakePublic<UserViewModel, Action<UserViewModel, object?, EventArgs>>((vm, sender, e) => UserViewModelAccessors.OnLoad(vm, sender, e)); // Most accurate but very difficult
         Overwrites.MakePublic(UserViewModelAccessors.OnLoad); // Slightly better than above
@@ -42,12 +48,22 @@ public class UserViewModelBuilder : IGeneratorInstructions
         public void OnLoad(object? sender, EventArgs e);
     }
 
-    internal static class UserViewModelAccessors
+    internal static class UserViewModelAccessors // I am probably not going to use this design, way too difficult for a developer to use
     {
         // Name omitted: by default, the accessor method name "OnLoad"
         // is used as the target member name.
         [UnsafeAccessor(UnsafeAccessorKind.Method)]
         internal static extern void OnLoad(UserViewModel @this, object? sender, EventArgs e);
+    }
+}
+
+public class BaseBuilder : IGeneratorInstructions
+{
+    public void Configure()
+    {
+        Overwrites.ReplaceProperty<Func<DateTime>>(() => DateTime.Now, () => TestClock.Now);
+        Overwrites.Replace(File.ReadAllText, TestFile.ReadAllText);
+        Overwrites.Replace(s => s.IsValidEmail(), TestEmail.IsValidEmail);
     }
 }
 
@@ -68,9 +84,22 @@ public class Overwrites
     public static void Mockable<TDelegate>(TDelegate value)
         where TDelegate : Delegate { }
 
-    // Etc. for the others
+    public static void MakePublic<TInterface, TDelegate>(Expression<Func<TInterface, TDelegate>> methodSelector)
+        where TDelegate : Delegate { }
 
     public static void MakePublic(string methodName, params Type[] parameterTypes) { }
+
+    public static void Include<T>()
+        where T : IGeneratorInstructions { }
+
+    public static void RedirectNew<TTarget, TDelegate>(Func<TTarget> value1, Func<TDelegate> value2)
+        where TDelegate : Delegate { }
+
+    public static void Mock<T>() { }
+
+    // Etc. for the others
+
+    // public static void MakePublic(string methodName, params Type[] parameterTypes) { }
 
     internal static void ForClass<T>()
     {
@@ -102,7 +131,10 @@ public class FakeBaseViewModel { }
 
 public class GeneratorInstructionsAttribute : Attribute { }
 
-public interface IGeneratorInstructions { }
+public interface IGeneratorInstructions
+{
+    void Configure();
+}
 
 public static class TestClock
 {
