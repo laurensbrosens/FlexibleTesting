@@ -5,7 +5,7 @@ using LegacyCodeProject.Viewmodels;
 namespace LegacyCodeProjectTests;
 
 [GeneratorInstructions(typeof(IGeneratorInstructions))]
-public partial class UserViewModelBuilder
+public class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewModel(someDataObject)
 {
     public void Configure()
     {
@@ -15,9 +15,10 @@ public partial class UserViewModelBuilder
         Overwrites.MockInheritance(); // Automatically create a fake base class if needed, could be combined with InheritFrom?
         Overwrites.InheritFrom<FakeBaseViewModel>(); // Developer provided fake base, usefull for base classes that are used a lot
         Overwrites.Mockable(() => DateTime.Now);
+        Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad); // Don't need IShadow, does not work for private of course, but works for protected, internal and protected internal
         Overwrites.MakePublic<IShadow, Action<object?, EventArgs>>(x => x.OnLoad);
         Overwrites.MakePublic<IShadow, Action>(x => x.IReallyWontToTestThisMethod);
-        // Overwrites.MakePublic("OnLoad");
+        // Overwrites.MakePublic("OnLoad"); I want to prevent allowing string based API
     }
 
     private interface IShadow
