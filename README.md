@@ -6,6 +6,7 @@ If found no examples of creating a builder to specify on how a generator works. 
 class file based on class type? The cookbook specifically says that using an interface as marker instead of an attribute
 is significantly less efficient and considered bad practice (for source generators).
 
+Debugging is hard, but exceptions seem to work (visible in build output)
 
 ## Goal
 
