@@ -96,11 +96,7 @@ public class FlexibleTestingGenerator : IIncrementalGenerator
                     throw new System.Exception($"Oh oh");
                     return default; // TODO: Add diagnostic that the target class must be in the same project
                 }
-                // Verkrijg de SyntaxNode (meestal een ClassDeclarationSyntax)
                 var syntaxNode = syntaxReference.GetSyntax(ct);
-
-                // .ToFullString() geeft je de volledige broncode inclusief trivia (comments, witregels)
-                // .ToString() geeft de code zonder de leidende/afsluitende witregels van buiten de node
                 string fullClassContent = syntaxNode.ToFullString();
                 fullClassContent+= syntaxNode.SyntaxTree.GetCompilationUnitRoot();
 
@@ -111,10 +107,6 @@ public class FlexibleTestingGenerator : IIncrementalGenerator
                 var rewriter = new ClassRenamer(oldName, newName);
                 var newRoot = rewriter.Visit(root);
                 var betterAllContent = newRoot.ToFullString();
-                // Gebruik deze string in je TargetClassData
-
-                // Add it to our results
-                //throw new System.Exception($"count = {typeSymbol.DeclaringSyntaxReferences.Length} Here you go:{fullClassContent.Count()}");
                 return new TargetClassData(namespaceName, className, betterAllContent);
             }
         }

@@ -8,6 +8,8 @@ is significantly less efficient and considered bad practice (for source generato
 
 Debugging is hard, but exceptions seem to work (visible in build output)
 
+Limitation: Generated code has to be in the same project as the legacy code (because I can't copy it's content otherwise).
+
 ## Goal
 
 Make extremely large legacy C# code unit-testable (including WPF ViewModels) without heavy refactors, by compiling a “testable copy” and applying controlled rewrites (dependencies, inheritance) via a source generator (+ analyzer). The developer writes normal unit tests (xUnit/NUnit) and can still use NSubstitute/FluentValidation.
