@@ -1,6 +1,6 @@
-﻿using LegacyCodeProject.Core;
+﻿using FlexibleTesting;
+using LegacyCodeProject.Core;
 using LegacyCodeProject.Viewmodels;
-using System.Linq.Expressions;
 
 namespace LegacyCodeProjectTests;
 
@@ -35,39 +35,6 @@ public class BaseBuilder : IGeneratorInstructions
     }
 }
 
-public class Overwrites
-{
-    public static void ReplaceProperty<TDelegate>(Expression<TDelegate> target, Expression<TDelegate> replacement)
-        where TDelegate : Delegate { }
-
-    public static void Replace<TDelegate>(TDelegate target, TDelegate replacement)
-        where TDelegate : Delegate { }
-
-    public static void Mockable<TDelegate>(TDelegate value)
-        where TDelegate : Delegate { }
-
-    public static void MakePublic<TInterface, TDelegate>(Expression<Func<TInterface, TDelegate>> methodSelector)
-        where TDelegate : Delegate { }
-
-    public static void MakePublic(string methodName, params Type[] parameterTypes) { }
-
-    public static void Include<T>()
-        where T : IGeneratorInstructions { }
-
-    public static void RedirectNew<TTarget, TDelegate>(Func<TTarget> value1, Func<TDelegate> value2)
-        where TDelegate : Delegate { }
-
-    public static void Mock<TClass>() { }
-
-    public static void MockWithInterface<TClass, TInterface>() { }
-
-    public static void ForClass<TClass>() { }
-
-    public static void MockInheritance() { }
-
-    public static void InheritFrom<TClass>() { }
-}
-
 public static class StringExtensions
 {
     public static bool IsValidEmail(this string s) => TestEmail.IsValidEmail(s);
@@ -76,11 +43,6 @@ public static class StringExtensions
 public class FakeBaseViewModel { }
 
 public class GeneratorInstructionsAttribute : Attribute { }
-
-public interface IGeneratorInstructions
-{
-    void Configure();
-}
 
 public static class TestClock
 {

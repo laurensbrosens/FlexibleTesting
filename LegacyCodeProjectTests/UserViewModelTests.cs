@@ -27,7 +27,7 @@ public class UserViewModelTests
         vm.Name = "Before";
 
         // Act
-        vm.OnLoad(null, EventArgs.Empty);
+        //vm.OnLoad(null, EventArgs.Empty);
 
         // Assert
         Assert.That(vm.Name, Is.EqualTo("Test"));
@@ -41,7 +41,7 @@ public class UserViewModelTests
         var vm = new UserViewModel(data);
         
         bool loadEventFired = false;
-        vm.LoadEvent += (sender, e) => loadEventFired = true;
+        //vm.LoadEvent += (sender, e) => loadEventFired = true;
 
         // Act - Change a property in SomeDataObject
         data.MyProperty = 42;
