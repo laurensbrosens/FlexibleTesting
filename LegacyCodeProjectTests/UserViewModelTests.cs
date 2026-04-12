@@ -1,5 +1,4 @@
 ﻿using LegacyCodeProject.Core;
-using LegacyCodeProject.Viewmodels;
 
 namespace LegacyCodeProjectTests;
 
@@ -12,7 +11,7 @@ public class UserViewModelTests
         var data = new SomeDataObject();
 
         // Act
-        var vm = new UserViewModel(data);
+        var vm = new UserViewModel_G(data);
 
         // Assert
         Assert.That(vm.Name, Is.EqualTo("Default"));
@@ -23,7 +22,7 @@ public class UserViewModelTests
     {
         // Arrange
         var data = new SomeDataObject();
-        var vm = new UserViewModel(data);
+        var vm = new UserViewModel_G(data);
         vm.Name = "Before";
 
         // Act
@@ -38,7 +37,7 @@ public class UserViewModelTests
     {
         // Arrange
         var data = new SomeDataObject();
-        var vm = new UserViewModel(data);
+        var vm = new UserViewModel_G(data);
         
         bool loadEventFired = false;
         //vm.LoadEvent += (sender, e) => loadEventFired = true;
