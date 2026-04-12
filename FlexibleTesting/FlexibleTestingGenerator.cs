@@ -75,11 +75,23 @@ public class FlexibleTestingGenerator : IIncrementalGenerator
             // 2. Zoek naar MakePublic<TInterface, TDelegate>(x => x.Method)
             if (symbol.Name == "MakePublic" && invocation.ArgumentList.Arguments.Count > 0)
             {
-                var lambda = invocation.ArgumentList.Arguments[0].Expression as LambdaExpressionSyntax;
-                if (lambda?.Body is MemberAccessExpressionSyntax mae)
+                var argument = invocation.ArgumentList.Arguments[0].Expression;
+
+                // Haal de lambda op (zowel x => x.Method als () => Method)
+                if (argument is LambdaExpressionSyntax lambda)
                 {
-                    // Haal het exacte symbool van de methode op die in de lambda wordt aangeroepen
-                    var methodSymbol = context.SemanticModel.GetSymbolInfo(mae, ct).Symbol as IMethodSymbol;
+                    // We proberen het symbool te vinden van de body van de lambda
+                    // Dit werkt voor: x => x.Method, () => Method, en () => Method()
+                    SyntaxNode nodeToInspect = lambda.Body;
+
+                    // Als de body een aanroep is, bijv. () => Method(), inspecteer dan de methode zelf
+                    if (nodeToInspect is InvocationExpressionSyntax invocationBody)
+                    {
+                        nodeToInspect = invocationBody.Expression;
+                    }
+
+                    var methodSymbol = context.SemanticModel.GetSymbolInfo(nodeToInspect, ct).Symbol as IMethodSymbol;
+
                     if (methodSymbol != null)
                     {
                         methodsToMakePublic.Add(methodSymbol);

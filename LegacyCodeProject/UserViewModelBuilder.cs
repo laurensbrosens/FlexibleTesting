@@ -16,15 +16,13 @@ public class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewModel
         Overwrites.InheritFrom<FakeBaseViewModel>(); // Developer provided fake base, usefull for base classes that are used a lot
         Overwrites.Mockable(() => DateTime.Now);
         Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad); // Don't need IShadow, does not work for private of course, but works for protected, internal and protected internal
-        Overwrites.MakePublic<IShadow, Action<object?, EventArgs>>(x => x.OnLoad);
-        Overwrites.MakePublic<IShadow, Action>(x => x.IReallyWontToTestThisMethod);
+        Overwrites.MakePublic<IShadow, Action>(x => x.IReallyWantToTestThisMethod);
         // Overwrites.MakePublic("OnLoad"); I want to prevent allowing string based API
     }
 
-    private interface IShadow
+    private interface IShadow // This is a hack for private members
     {
-        public void OnLoad(object? sender, EventArgs e);
-        public void IReallyWontToTestThisMethod();
+        public void IReallyWantToTestThisMethod();
     }
 }
 
