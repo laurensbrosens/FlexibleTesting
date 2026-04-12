@@ -16,12 +16,14 @@ public partial class UserViewModelBuilder
         Overwrites.InheritFrom<FakeBaseViewModel>(); // Developer provided fake base, usefull for base classes that are used a lot
         Overwrites.Mockable(() => DateTime.Now);
         Overwrites.MakePublic<IShadow, Action<object?, EventArgs>>(x => x.OnLoad);
+        Overwrites.MakePublic<IShadow, Action>(x => x.IReallyWontToTestThisMethod);
         // Overwrites.MakePublic("OnLoad");
     }
 
     private interface IShadow
     {
         public void OnLoad(object? sender, EventArgs e);
+        public void IReallyWontToTestThisMethod();
     }
 }
 

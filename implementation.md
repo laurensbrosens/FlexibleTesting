@@ -1,6 +1,6 @@
 Steps implementation of sourcegenerator:
 1. DONE Create copy of class defined with Overwrites.ForClass in a .g.cs file with a _g suffix
-2. Overwrites.MakePublic
+2. DONE Overwrites.MakePublic
 3. Overwrites.ReplaceProperty
 4. Overwrites.Replace
 5. Overwrites.InheritFrom (probably easier than MockInheritance?)

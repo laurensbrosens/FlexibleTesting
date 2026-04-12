@@ -1,6 +1,7 @@
 ﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 
@@ -48,69 +49,65 @@ public class FlexibleTestingGenerator : IIncrementalGenerator
     public static TargetClassData GetTargetClassesToGenerate(GeneratorAttributeSyntaxContext context, CancellationToken ct)
     {
         var generatorInstructionsClass = (ClassDeclarationSyntax)context.TargetNode;
-
-        // Find the "Configure" method inside this class
         var configureMethod = generatorInstructionsClass.Members.OfType<MethodDeclarationSyntax>().FirstOrDefault(m => m.Identifier.Text == "Configure");
 
-        if (configureMethod == null || configureMethod.Body == null)
-        {
+        if (configureMethod?.Body == null)
             return default;
-        }
 
-        // Look through all method calls (InvocationExpressions) inside the Configure method body
-        var methodCalls = configureMethod.Body.DescendantNodes().OfType<InvocationExpressionSyntax>().Select(i => i.Expression).OfType<MemberAccessExpressionSyntax>();
+        // We verzamelen hier de methoden die we public moeten maken
+        var methodsToMakePublic = new List<IMethodSymbol>();
+        ITypeSymbol targetTypeSymbol = null;
 
-        foreach (var methodCall in methodCalls) // Looks for MemberAccessExpression (e.g., Object.Method)
+        var invocations = configureMethod.Body.DescendantNodes().OfType<InvocationExpressionSyntax>();
+
+        foreach (var invocation in invocations)
         {
-            // Check if the object being called is "Overwrites"
-            if (methodCall.Expression.ToString() != "Overwrites" || methodCall.Name is not GenericNameSyntax genericName || genericName.Identifier.Text != "ForClass")
-            {
+            var symbol = context.SemanticModel.GetSymbolInfo(invocation, ct).Symbol as IMethodSymbol;
+            if (symbol == null || symbol.ContainingType?.Name != "Overwrites")
                 continue;
+
+            // 1. Zoek naar ForClass<T>
+            if (symbol.Name == "ForClass" && symbol.IsGenericMethod)
+            {
+                targetTypeSymbol = symbol.TypeArguments.FirstOrDefault();
             }
 
-            // Get the <T> part (e.g., UserViewModel)
-            var typeArgument = genericName.TypeArgumentList.Arguments.FirstOrDefault();
-            if (typeArgument == null)
+            // 2. Zoek naar MakePublic<TInterface, TDelegate>(x => x.Method)
+            if (symbol.Name == "MakePublic" && invocation.ArgumentList.Arguments.Count > 0)
             {
-                return default;
-            }
-
-            // Now we use the SemanticModel.
-            // Syntax just tells us it says "UserViewModel".
-            // SemanticModel tells us EXACTLY what UserViewModel is (its namespace, etc.)
-            var typeInfo = context.SemanticModel.GetTypeInfo(typeArgument, ct);
-
-            // If the compiler successfully figured out what type T is...
-            if (typeInfo.Type != null && typeInfo.Type.TypeKind != TypeKind.Error)
-            {
-                var typeSymbol = typeInfo.Type;
-
-                // Extract just the strings we need for code generation!
-                var namespaceName = typeSymbol.ContainingNamespace.IsGlobalNamespace ? string.Empty : typeSymbol.ContainingNamespace.ToDisplayString();
-
-                var className = typeSymbol.Name;
-
-                var syntaxReference = typeSymbol.DeclaringSyntaxReferences.FirstOrDefault();
-                if (syntaxReference == null)
+                var lambda = invocation.ArgumentList.Arguments[0].Expression as LambdaExpressionSyntax;
+                if (lambda?.Body is MemberAccessExpressionSyntax mae)
                 {
-                    throw new System.Exception($"Oh oh");
-                    return default; // TODO: Add diagnostic that the target class must be in the same project
+                    // Haal het exacte symbool van de methode op die in de lambda wordt aangeroepen
+                    var methodSymbol = context.SemanticModel.GetSymbolInfo(mae, ct).Symbol as IMethodSymbol;
+                    if (methodSymbol != null)
+                    {
+                        methodsToMakePublic.Add(methodSymbol);
+                    }
                 }
-                var syntaxNode = syntaxReference.GetSyntax(ct);
-                string fullClassContent = syntaxNode.ToFullString();
-                fullClassContent+= syntaxNode.SyntaxTree.GetCompilationUnitRoot();
-
-                var classNode = (ClassDeclarationSyntax)syntaxNode;
-                var oldName = classNode.Identifier.Text;
-                var newName = $"{oldName}_G";
-                var root = syntaxNode.SyntaxTree.GetRoot();
-                var rewriter = new ClassRenamer(oldName, newName);
-                var newRoot = rewriter.Visit(root);
-                var betterAllContent = newRoot.ToFullString();
-                return new TargetClassData(namespaceName, className, betterAllContent);
             }
         }
-        return default; // TODO: Add diagnostic that Overwrites.ForClass<T>() is required
+
+        if (targetTypeSymbol != null && targetTypeSymbol.TypeKind != TypeKind.Error)
+        {
+            var syntaxReference = targetTypeSymbol.DeclaringSyntaxReferences.FirstOrDefault();
+            if (syntaxReference == null)
+                return default;
+
+            var classNode = (ClassDeclarationSyntax)syntaxReference.GetSyntax(ct);
+            var oldName = classNode.Identifier.Text;
+            var newName = $"{oldName}_G";
+
+            var root = classNode.SyntaxTree.GetRoot(ct);
+            // Gebruik de uitgebreide rewriter
+            var targetSemanticModel = context.SemanticModel.Compilation.GetSemanticModel(classNode.SyntaxTree);
+            var rewriter = new ClassRenamer(targetSemanticModel, oldName, newName, methodsToMakePublic);
+            var newRoot = rewriter.Visit(root);
+
+            return new TargetClassData(targetTypeSymbol.ContainingNamespace.ToDisplayString(), oldName, newRoot.ToFullString());
+        }
+
+        return default;
     }
 
     private static void GeneratePartialClass(SourceProductionContext context, TargetClassData targetData)
@@ -135,28 +132,37 @@ public record struct TargetClassData(string Namespace, string ClassName, string 
 
 public class ClassRenamer : CSharpSyntaxRewriter
 {
+    private readonly SemanticModel _semanticModel;
     private readonly string _oldName;
     private readonly string _newName;
+    private readonly List<string> _methodsToMakePublicSignatures;
 
-    public ClassRenamer(string oldName, string newName)
+    public ClassRenamer(SemanticModel semanticModel, string oldName, string newName, IEnumerable<IMethodSymbol> methodsToMakePublic)
     {
+        _semanticModel = semanticModel;
         _oldName = oldName;
         _newName = newName;
+        // We zetten de symbolen direct om naar signatures voor snelle vergelijking
+        _methodsToMakePublicSignatures = methodsToMakePublic.Select(m => m.ToSignatureString()).ToList();
     }
 
-    // Herstel de klassenaam zelf
     public override SyntaxNode VisitClassDeclaration(ClassDeclarationSyntax node)
     {
-        if (node.Identifier.Text == _oldName)
+        // 1. Bezoek eerst de kinderen (methoden) zodat de SemanticModel ze nog kan vinden
+        var visitedNode = (ClassDeclarationSyntax)base.VisitClassDeclaration(node);
+
+        // 2. Pas daarna de naam van de klasse aan
+        if (visitedNode.Identifier.Text == _oldName)
         {
-            node = node.WithIdentifier(SyntaxFactory.Identifier(_newName));
+            visitedNode = visitedNode.WithIdentifier(SyntaxFactory.Identifier(_newName));
         }
-        return base.VisitClassDeclaration(node);
+
+        return visitedNode;
     }
 
-    // Herstel alle constructors
     public override SyntaxNode VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
     {
+        // Constructors moeten ook de nieuwe klassenaam krijgen
         if (node.Identifier.Text == _oldName)
         {
             node = node.WithIdentifier(SyntaxFactory.Identifier(_newName));
@@ -164,13 +170,60 @@ public class ClassRenamer : CSharpSyntaxRewriter
         return base.VisitConstructorDeclaration(node);
     }
 
-    // Optioneel: Herstel ook statische methoden of velden die de oude naam als type gebruiken
-    public override SyntaxNode VisitIdentifierName(IdentifierNameSyntax node)
+    public override SyntaxNode VisitMethodDeclaration(MethodDeclarationSyntax node)
     {
-        if (node.Identifier.Text == _oldName)
+        var symbol = _semanticModel.GetDeclaredSymbol(node);
+        if (symbol == null)
+            return base.VisitMethodDeclaration(node);
+
+        if (_methodsToMakePublicSignatures.Contains(symbol.ToSignatureString()))
         {
-            return node.WithIdentifier(SyntaxFactory.Identifier(_newName));
+            // 1. Bewaar de originele tekst van de declaratie (zonder de body) voor het commentaar
+            // We pakken de tekst van het begin van de node tot aan het begin van de body
+            var originalDeclaration = node.WithBody(null).WithSemicolonToken(default).ToString().Trim();
+            var commentTrivia = SyntaxFactory.Comment($" // Original: {originalDeclaration}");
+
+            // 2. Behoud de inspringing (zoals in de vorige stap)
+            var leadingTrivia = node.Modifiers.Count > 0 ? node.Modifiers.First().LeadingTrivia : node.ReturnType.GetLeadingTrivia();
+
+            // 3. Filter modifiers
+            var otherModifiers = node.Modifiers.Where(m => !m.IsKind(SyntaxKind.PrivateKeyword) && !m.IsKind(SyntaxKind.ProtectedKeyword)).ToList();
+
+            var publicToken = SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithLeadingTrivia(leadingTrivia).WithTrailingTrivia(SyntaxFactory.Space);
+
+            // 4. Voeg het commentaar toe aan het einde van de parameterlijst (ParameterList.GetTrailingTrivia)
+            // of aan de SemicolonToken als het een abstracte/interface methode is.
+            var updatedNode = node.WithModifiers(SyntaxFactory.TokenList(otherModifiers.Prepend(publicToken)))
+                .WithReturnType(node.ReturnType.WithLeadingTrivia(SyntaxFactory.TriviaList()));
+
+            // We plakken het commentaar achter de parameterlijst
+            var newTrailingTrivia = updatedNode.ParameterList.GetTrailingTrivia().Insert(0, commentTrivia);
+
+            return updatedNode.WithParameterList(updatedNode.ParameterList.WithTrailingTrivia(newTrailingTrivia));
         }
-        return base.VisitIdentifierName(node);
+
+        return base.VisitMethodDeclaration(node);
+    }
+}
+
+public static class MethodSymbolExtensions
+{
+    public static string ToSignatureString(this IMethodSymbol symbol)
+    {
+        if (symbol == null)
+            return string.Empty;
+
+        // We gebruiken een format die alleen naar de 'inhoud' van de methode kijkt
+        var format = new SymbolDisplayFormat(
+            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
+            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
+            memberOptions: SymbolDisplayMemberOptions.IncludeParameters | SymbolDisplayMemberOptions.IncludeType,
+            parameterOptions: SymbolDisplayParameterOptions.IncludeType,
+            miscellaneousOptions: SymbolDisplayMiscellaneousOptions.UseSpecialTypes
+        );
+
+        // Resultaat: "MethodName<T>(ParamType1, ParamType2)"
+        return symbol.ToDisplayString(format);
     }
 }

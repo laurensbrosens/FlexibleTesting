@@ -27,8 +27,13 @@ public class UserViewModel : BaseViewModel
     protected override void OnLoad(object? sender, EventArgs e)
     {
         base.OnLoad(sender, e);
-        Name = "Test";
+        IReallyWontToTestThisMethod();
     }
 
     private UserService _userService;
+
+    private void IReallyWontToTestThisMethod()
+    {
+        Name = "Something to test";
+    }
 }
