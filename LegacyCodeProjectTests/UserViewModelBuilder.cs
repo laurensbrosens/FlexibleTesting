@@ -95,7 +95,9 @@ public class Overwrites
     public static void RedirectNew<TTarget, TDelegate>(Func<TTarget> value1, Func<TDelegate> value2)
         where TDelegate : Delegate { }
 
-    public static void Mock<T>() { }
+    public static void Mock<TClass>() { }
+
+    public static void MockWithInterface<TClass, TInterface>() { }
 
     // Etc. for the others
 
