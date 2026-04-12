@@ -1,11 +1,8 @@
 ﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using System;
-using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
-using System.Text;
 using System.Threading;
 
 namespace FlexibleTesting.Generators;
@@ -80,55 +77,6 @@ public class Overwrites
 }
 """;
 
-    // Keep this around so later Overwrites.* can be added without changing the pipeline shape too much.
-    private record InstructionPlan(
-        INamedTypeSymbol InstructionType,
-        ForClassPlan? ForClass
-    // TODO: add more overwrites later
-    );
-
-    private record ForClassPlan(INamedTypeSymbol TargetType, string CopyTypeName, Location InvocationLocation);
-
-    private record InstructionOutput(ImmutableArray<Diagnostic> Diagnostics, ImmutableArray<GeneratedFile> Files);
-
-    private record GeneratedFile(string HintName, string Source);
-
-    private static readonly DiagnosticDescriptor MultipleForClassCalls = new(
-        id: "FTG001",
-        title: "Multiple Overwrites.ForClass calls",
-        messageFormat: "Only one Overwrites.ForClass<T>() call is allowed across all Configure() implementations of instruction class '{0}'.",
-        category: "FlexibleTestingGenerator",
-        defaultSeverity: DiagnosticSeverity.Error,
-        isEnabledByDefault: true
-    );
-
-    private static readonly DiagnosticDescriptor ForClassTargetNotFromSource = new(
-        id: "FTG002",
-        title: "Overwrites.ForClass target must come from source",
-        messageFormat: "Overwrites.ForClass<T>() target type '{0}' has no source declaration (metadata-only). Exact copying requires source.",
-        category: "FlexibleTestingGenerator",
-        defaultSeverity: DiagnosticSeverity.Error,
-        isEnabledByDefault: true
-    );
-
-    private static readonly DiagnosticDescriptor ForClassNestedNotSupported = new(
-        id: "FTG003",
-        title: "Nested ForClass target not supported",
-        messageFormat: "Overwrites.ForClass<T>() target type '{0}' is nested. Exact copying nested types is not supported (yet).",
-        category: "FlexibleTestingGenerator",
-        defaultSeverity: DiagnosticSeverity.Error,
-        isEnabledByDefault: true
-    );
-
-    private static readonly DiagnosticDescriptor ForClassTargetNotClass = new(
-        id: "FTG004",
-        title: "Overwrites.ForClass target must be a class",
-        messageFormat: "Overwrites.ForClass<T>() target type '{0}' is not a class.",
-        category: "FlexibleTestingGenerator",
-        defaultSeverity: DiagnosticSeverity.Error,
-        isEnabledByDefault: true
-    );
-
     private void CreateGeneratorInstructions(IncrementalGeneratorInitializationContext context)
     {
         context.RegisterPostInitializationOutput(ctx =>
@@ -145,159 +93,85 @@ public class Overwrites
         // System.Diagnostics.Debugger.Launch();
         CreateGeneratorInstructions(context);
 
-        // Find all classes with [GeneratorInstructions]
-        var instructionTypes = context
-            .SyntaxProvider.ForAttributeWithMetadataName(
-                fullyQualifiedMetadataName: "FlexibleTesting.GeneratorInstructionsAttribute",
-                predicate: static (node, _) => node is ClassDeclarationSyntax,
-                transform: static (ctx, _) => (INamedTypeSymbol)ctx.TargetSymbol
-            )
-            .WithComparer(SymbolEqualityComparer.Default);
- 
-
-        // Build a plan per instruction type (incremental-friendly), then generate all files for that plan.
-        var outputs = instructionTypes.Combine(context.CompilationProvider).Select(static (pair, ct) => BuildInstructionOutput(pair.Left, pair.Right, ct));
-
-        context.RegisterSourceOutput(
-            outputs,
-            static (spc, output) =>
+        // 1. Find classes with your specific attribute
+        IncrementalValuesProvider<ImmutableArray<TargetClassData>> targetClasses = context.SyntaxProvider.ForAttributeWithMetadataName(
+            fullyQualifiedMetadataName: "FlexibleTesting.GeneratorInstructionsAttribute", // TODO: Change this to your actual attribute name
+            predicate: static (s, _) => s is ClassDeclarationSyntax, // Ensure the attribute is on a class
+            transform: static (ctx, cancellationToken) =>
             {
-                // System.Diagnostics.Debugger.Launch();
-                foreach (var d in output.Diagnostics)
-                    spc.ReportDiagnostic(d);
-
-                foreach (var f in output.Files)
-                    spc.AddSource(f.HintName, f.Source);
+                ISymbol classSymbol = ctx.TargetSymbol;
+                return ImmutableArray.Create(new TargetClassData("LegacyCodeProject.Viewmodels", "UserViewModel"));
+                /*
+                return new ClassModel(
+                    classSymbol.Name,
+                    classSymbol.ContainingNamespace.ToDisplayString(),
+                    GetInterfaceModels(ctx.Attributes[0])
+                    );*/
             }
         );
+
+        context.RegisterSourceOutput(targetClasses, static (ctx, targetClass) =>
+        {
+            ctx.AddSource($"Overwrites2.g.cs", OverwritesHelperCode);
+        });
     }
 
-    private static InstructionOutput BuildInstructionOutput(INamedTypeSymbol instructionType, Compilation compilation, CancellationToken ct)
+    // ... Methods will be defined below
+
+    public static ImmutableArray<TargetClassData> GetTargetClassesToGenerate(GeneratorAttributeSyntaxContext context, CancellationToken ct)
     {
-        // System.Diagnostics.Debugger.Launch();
-        ct.ThrowIfCancellationRequested();
+        return ImmutableArray.Create(new TargetClassData("LegacyCodeProject.Viewmodels", "UserViewModel"));
 
-        var diags = ImmutableArray.CreateBuilder<Diagnostic>();
-        var files = ImmutableArray.CreateBuilder<GeneratedFile>();
+        // context.TargetNode is the class that has the attribute
+        var classDeclaration = (ClassDeclarationSyntax)context.TargetNode;
+        var semanticModel = context.SemanticModel;
 
-        var plan = BuildInstructionPlan(instructionType, compilation, ct, diags);
-        if (plan.ForClass is { } forClass)
+        // Find the "Configure" method inside this class
+        var configureMethod = classDeclaration.Members.OfType<MethodDeclarationSyntax>().FirstOrDefault(m => m.Identifier.Text == "Configure");
+
+        if (configureMethod == null || configureMethod.Body == null)
         {
-            foreach (var f in GenerateForClassCopyFiles(plan.InstructionType, forClass, compilation, ct, diags))
-                files.Add(f);
+            return ImmutableArray<TargetClassData>.Empty;
         }
 
-        return new InstructionOutput(diags.ToImmutable(), files.ToImmutable());
-    }
+        var results = ImmutableArray.CreateBuilder<TargetClassData>();
 
-    private static InstructionPlan BuildInstructionPlan(INamedTypeSymbol instructionType, Compilation compilation, CancellationToken ct, ImmutableArray<Diagnostic>.Builder diags)
-    {
-        diags.Add(
-            Diagnostic.Create(
-                new DiagnosticDescriptor("SG001", "Debug Log", "Your message here: {0}", "CustomCategory", DiagnosticSeverity.Warning, true),
-                Location.None,
-                "Debug info"
-            )
-        );
-        ct.ThrowIfCancellationRequested();
+        // Look through all method calls (InvocationExpressions) inside the Configure method body
+        var invocations = configureMethod.Body.DescendantNodes().OfType<InvocationExpressionSyntax>();
 
-        var forClassInvocations = FindForClassInvocations(instructionType, compilation, ct);
-        if (forClassInvocations.Length == 0)
-            return new InstructionPlan(instructionType, ForClass: null);
-
-        if (forClassInvocations.Length > 1)
+        foreach (var invocation in invocations)
         {
-            // Put the error at the second call (and more), but generating anything would be ambiguous.
-            foreach (var inv in forClassInvocations.Skip(1))
-                diags.Add(Diagnostic.Create(MultipleForClassCalls, inv.InvocationLocation, instructionType.ToDisplayString()));
-
-            return new InstructionPlan(instructionType, ForClass: null);
-        }
-
-        var single = forClassInvocations[0];
-
-        if (single.TargetType.TypeKind != TypeKind.Class)
-        {
-            diags.Add(Diagnostic.Create(ForClassTargetNotClass, single.InvocationLocation, single.TargetType.ToDisplayString()));
-            return new InstructionPlan(instructionType, ForClass: null);
-        }
-
-        if (single.TargetType.ContainingType is not null)
-        {
-            diags.Add(Diagnostic.Create(ForClassNestedNotSupported, single.InvocationLocation, single.TargetType.ToDisplayString()));
-            return new InstructionPlan(instructionType, ForClass: null);
-        }
-
-        if (single.TargetType.DeclaringSyntaxReferences.Length == 0)
-        {
-            diags.Add(Diagnostic.Create(ForClassTargetNotFromSource, single.InvocationLocation, single.TargetType.ToDisplayString()));
-            return new InstructionPlan(instructionType, ForClass: null);
-        }
-
-        var copyName = ComputeCopyTypeName(single.TargetType, instructionType);
-
-        return new InstructionPlan(instructionType, ForClass: new ForClassPlan(single.TargetType, copyName, single.InvocationLocation));
-    }
-
-    private record ForClassInvocation(INamedTypeSymbol TargetType, Location InvocationLocation);
-
-    private static ImmutableArray<ForClassInvocation> FindForClassInvocations(INamedTypeSymbol instructionType, Compilation compilation, CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-
-        var overwritesType = compilation.GetTypeByMetadataName("FlexibleTesting.Overwrites");
-
-        bool IsForClassMethod(IMethodSymbol method)
-        {
-            if (method is null || method.Name != "ForClass" || !method.IsGenericMethod || method.TypeArguments.Length != 1)
-                return false;
-
-            if (overwritesType is not null)
-                return SymbolEqualityComparer.Default.Equals(method.ContainingType, overwritesType);
-
-            // Fallback if Overwrites isn't bindable yet for some reason.
-            return method.ContainingType?.ToDisplayString() == "FlexibleTesting.Overwrites";
-        }
-
-        // All Configure() methods (including explicit interface impls) across partial parts.
-        var configureMethods = instructionType.GetMembers().OfType<IMethodSymbol>().Where(m => m.Name == "Configure" && m.Parameters.Length == 0 && m.ReturnsVoid);
-
-        var results = ImmutableArray.CreateBuilder<ForClassInvocation>();
-
-        foreach (var configure in configureMethods)
-        {
-            foreach (var sr in configure.DeclaringSyntaxReferences)
+            // We are looking for something that looks like Overwrites.ForClass<T>()
+            // This means the expression must be a MemberAccessExpression (e.g., Object.Method)
+            if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
             {
-                ct.ThrowIfCancellationRequested();
-
-                if (sr.GetSyntax(ct) is not MethodDeclarationSyntax methodSyntax)
-                    continue;
-
-                var model = compilation.GetSemanticModel(methodSyntax.SyntaxTree);
-
-                IEnumerable<InvocationExpressionSyntax> invocations = (methodSyntax.Body?.DescendantNodes() ?? Enumerable.Empty<SyntaxNode>())
-                    .Concat(methodSyntax.ExpressionBody?.DescendantNodes() ?? Enumerable.Empty<SyntaxNode>())
-                    .OfType<InvocationExpressionSyntax>();
-
-                foreach (var inv in invocations)
+                // Check if the object being called is "Overwrites"
+                if (memberAccess.Expression.ToString() == "Overwrites" && memberAccess.Name is GenericNameSyntax genericName && genericName.Identifier.Text == "ForClass")
                 {
-                    ct.ThrowIfCancellationRequested();
+                    // Get the <T> part (e.g., UserViewModel)
+                    var typeArgument = genericName.TypeArgumentList.Arguments.FirstOrDefault();
 
-                    var symbol = model.GetSymbolInfo(inv, ct).Symbol as IMethodSymbol;
-                    if (symbol is null)
-                        continue;
+                    if (typeArgument != null)
+                    {
+                        // Now we use the SemanticModel.
+                        // Syntax just tells us it says "UserViewModel".
+                        // SemanticModel tells us EXACTLY what UserViewModel is (its namespace, etc.)
+                        var typeInfo = semanticModel.GetTypeInfo(typeArgument, ct);
 
-                    // Reduced extension methods etc: normalize to the original definition.
-                    var candidate = symbol.ReducedFrom ?? symbol;
+                        // If the compiler successfully figured out what type T is...
+                        if (typeInfo.Type != null && typeInfo.Type.TypeKind != TypeKind.Error)
+                        {
+                            var typeSymbol = typeInfo.Type;
 
-                    if (!IsForClassMethod(candidate))
-                        continue;
+                            // Extract just the strings we need for code generation!
+                            var namespaceName = typeSymbol.ContainingNamespace.IsGlobalNamespace ? string.Empty : typeSymbol.ContainingNamespace.ToDisplayString();
 
-                    var target = candidate.TypeArguments[0] as INamedTypeSymbol;
-                    if (target is null)
-                        continue;
+                            var className = typeSymbol.Name;
 
-                    results.Add(new ForClassInvocation(target, inv.GetLocation()));
+                            // Add it to our results
+                            results.Add(new TargetClassData(namespaceName, className));
+                        }
+                    }
                 }
             }
         }
@@ -305,192 +179,33 @@ public class Overwrites
         return results.ToImmutable();
     }
 
-    private static ImmutableArray<GeneratedFile> GenerateForClassCopyFiles(
-        INamedTypeSymbol instructionType,
-        ForClassPlan plan,
-        Compilation compilation,
-        CancellationToken ct,
-        ImmutableArray<Diagnostic>.Builder diags
-    )
+    private static void GeneratePartialClass(SourceProductionContext context, TargetClassData targetData)
     {
-        ct.ThrowIfCancellationRequested();
+        // Handle global namespaces gracefully
+        string namespaceDeclaration = string.IsNullOrEmpty(targetData.Namespace) ? "" : $"namespace {targetData.Namespace};";
 
-        var target = plan.TargetType;
-        var copyName = plan.CopyTypeName;
+        // Create the source code
+        // Note: We use "partial" here so it merges with the original UserViewModel
+        string source = $$"""
+            // <auto-generated/>
+            using System;
 
-        var files = ImmutableArray.CreateBuilder<GeneratedFile>();
+            {{namespaceDeclaration}}
 
-        // Exact-copy approach: copy every partial declaration part from source, rename the declared type,
-        // and rewrite all references *to the original type symbol* to the new name inside that part.
-        var parts = target.DeclaringSyntaxReferences;
+            public partial class {{targetData.ClassName}}
+            {
+                // TODO: Add your generated properties, methods, etc. here
+                public void GeneratedMethod() 
+                {
+                    Console.WriteLine("Hello from generated code inside {{targetData.ClassName}}!");
+                }
+            }
+            """;
 
-        for (int i = 0; i < parts.Length; i++)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var sr = parts[i];
-            var typeNode = sr.GetSyntax(ct) as TypeDeclarationSyntax;
-            if (typeNode is null)
-                continue;
-
-            var model = compilation.GetSemanticModel(typeNode.SyntaxTree);
-
-            var rewriter = new SelfTypeRenameRewriter(model, target, copyName);
-            var rewritten = (TypeDeclarationSyntax)rewriter.Visit(typeNode)!;
-
-            // Keep the original file's root usings/externs (but NOT assembly/module attributes to avoid duplicates).
-            var root = (CompilationUnitSyntax)typeNode.SyntaxTree.GetRoot(ct);
-
-            MemberDeclarationSyntax topLevelMember = WrapInOriginalNamespaces(typeNode, rewritten);
-
-            var unit = SyntaxFactory.CompilationUnit().WithExterns(root.Externs).WithUsings(root.Usings).WithMembers(SyntaxFactory.SingletonList(topLevelMember));
-
-            var source = "// <auto-generated/>\r\n" + unit.NormalizeWhitespace(elasticTrivia: true).ToFullString();
-
-            var hintName = MakeHintName(instructionType, target, copyName, partIndex: i);
-
-            files.Add(new GeneratedFile(hintName, source));
-        }
-
-        return files.ToImmutable();
-    }
-
-    private static MemberDeclarationSyntax WrapInOriginalNamespaces(TypeDeclarationSyntax originalTypeNode, TypeDeclarationSyntax rewrittenTypeNode)
-    {
-        MemberDeclarationSyntax current = rewrittenTypeNode;
-
-        // Recreate the namespace nesting from the original file around this type part
-        // (preserves any "using" directives that were scoped to those namespaces).
-        var namespaces = originalTypeNode.Ancestors().OfType<BaseNamespaceDeclarationSyntax>().Reverse().ToImmutableArray();
-
-        foreach (var ns in namespaces)
-        {
-            var newNs = SyntaxFactory
-                .NamespaceDeclaration(ns.Name)
-                .WithUsings(ns.Usings)
-                .WithExterns(ns.Externs)
-                .WithAttributeLists(ns.AttributeLists)
-                .WithMembers(SyntaxFactory.SingletonList(current));
-
-            current = newNs;
-        }
-
-        return current;
-    }
-
-    private static string ComputeCopyTypeName(INamedTypeSymbol targetType, INamedTypeSymbol instructionType)
-    {
-        // Deterministic + avoids collisions when multiple instruction classes copy the same target.
-        // Also keeps the copy in the SAME namespace as the target so sibling type name resolution stays identical.
-        var aritySuffix = targetType.Arity == 0 ? "" : $"__Arity{targetType.Arity}";
-        return $"{targetType.Name}{aritySuffix}__FlexibleTestingCopy__{instructionType.Name}";
-    }
-
-    private static string MakeHintName(INamedTypeSymbol instructionType, INamedTypeSymbol targetType, string copyTypeName, int partIndex)
-    {
-        static string Sanitize(string s)
-        {
-            var sb = new StringBuilder(s.Length);
-            foreach (var ch in s)
-                sb.Append(char.IsLetterOrDigit(ch) ? ch : '_');
-            return sb.ToString();
-        }
-
-        var targetFqn = targetType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-        var instructionFqn = instructionType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-
-        return $"{Sanitize(targetFqn)}__{Sanitize(copyTypeName)}__From__{Sanitize(instructionFqn)}__Part{partIndex}.g.cs";
-    }
-
-    private sealed class SelfTypeRenameRewriter : CSharpSyntaxRewriter
-    {
-        private readonly SemanticModel _model;
-        private readonly INamedTypeSymbol _originalType;
-        private readonly INamedTypeSymbol _originalTypeDefinition;
-        private readonly string _newTypeName;
-
-        public SelfTypeRenameRewriter(SemanticModel model, INamedTypeSymbol originalType, string newTypeName)
-            : base(visitIntoStructuredTrivia: true)
-        {
-            _model = model;
-            _originalType = originalType;
-            _originalTypeDefinition = originalType.OriginalDefinition;
-            _newTypeName = newTypeName;
-        }
-
-        public override SyntaxNode? VisitClassDeclaration(ClassDeclarationSyntax node)
-        {
-            if (IsDeclaredOriginalType(node))
-                node = node.WithIdentifier(ReplaceIdentifier(node.Identifier, _newTypeName));
-
-            return base.VisitClassDeclaration(node);
-        }
-
-        public override SyntaxNode? VisitRecordDeclaration(RecordDeclarationSyntax node)
-        {
-            if (IsDeclaredOriginalType(node))
-                node = node.WithIdentifier(ReplaceIdentifier(node.Identifier, _newTypeName));
-
-            return base.VisitRecordDeclaration(node);
-        }
-
-        public override SyntaxNode? VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
-        {
-            var sym = _model.GetDeclaredSymbol(node) as IMethodSymbol;
-            if (sym is not null && SymbolEqualityComparer.Default.Equals(sym.ContainingType?.OriginalDefinition, _originalTypeDefinition))
-                node = node.WithIdentifier(ReplaceIdentifier(node.Identifier, _newTypeName));
-
-            return base.VisitConstructorDeclaration(node);
-        }
-
-        public override SyntaxNode? VisitDestructorDeclaration(DestructorDeclarationSyntax node)
-        {
-            var sym = _model.GetDeclaredSymbol(node) as IMethodSymbol;
-            if (sym is not null && SymbolEqualityComparer.Default.Equals(sym.ContainingType?.OriginalDefinition, _originalTypeDefinition))
-                node = node.WithIdentifier(ReplaceIdentifier(node.Identifier, _newTypeName));
-
-            return base.VisitDestructorDeclaration(node);
-        }
-
-        public override SyntaxNode? VisitIdentifierName(IdentifierNameSyntax node)
-        {
-            if (RefersToOriginalType(node))
-                return node.WithIdentifier(ReplaceIdentifier(node.Identifier, _newTypeName));
-
-            return base.VisitIdentifierName(node);
-        }
-
-        public override SyntaxNode? VisitGenericName(GenericNameSyntax node)
-        {
-            if (RefersToOriginalType(node))
-                return node.WithIdentifier(ReplaceIdentifier(node.Identifier, _newTypeName));
-
-            return base.VisitGenericName(node);
-        }
-
-        private bool IsDeclaredOriginalType(TypeDeclarationSyntax node)
-        {
-            var sym = _model.GetDeclaredSymbol(node) as INamedTypeSymbol;
-            return sym is not null && SymbolEqualityComparer.Default.Equals(sym.OriginalDefinition, _originalTypeDefinition);
-        }
-
-        private bool RefersToOriginalType(SyntaxNode node)
-        {
-            // Try symbol first.
-            var info = _model.GetSymbolInfo(node);
-            var sym = info.Symbol ?? (info.CandidateSymbols.Length == 1 ? info.CandidateSymbols[0] : null);
-
-            if (sym is INamedTypeSymbol named)
-                return SymbolEqualityComparer.Default.Equals(named.OriginalDefinition, _originalTypeDefinition);
-
-            // Then type-info fallback.
-            var t = _model.GetTypeInfo(node).Type as INamedTypeSymbol;
-            if (t is not null)
-                return SymbolEqualityComparer.Default.Equals(t.OriginalDefinition, _originalTypeDefinition);
-
-            return false;
-        }
-
-        private static SyntaxToken ReplaceIdentifier(SyntaxToken original, string newText) => SyntaxFactory.Identifier(original.LeadingTrivia, newText, original.TrailingTrivia);
+        // Add the source file to the compilation
+        // We use the class name as the filename (e.g., UserViewModel_Generated.g.cs)
+        context.AddSource($"{targetData.ClassName}_Generated.g.cs", source);
     }
 }
+
+public record struct TargetClassData(string Namespace, string ClassName);
