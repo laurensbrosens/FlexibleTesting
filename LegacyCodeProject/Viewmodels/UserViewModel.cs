@@ -1,6 +1,5 @@
 ﻿using LegacyCodeProject.Core;
 using System.Runtime.CompilerServices;
-using static LegacyCodeProject.Viewmodels.UserViewModel_g;
 
 namespace LegacyCodeProject.Viewmodels;
 
@@ -34,7 +33,7 @@ public class UserViewModel : BaseViewModel
 
     private UserService _userService;
 }
-
+/*
 // Example of what the generated class would look like:
 public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
 {
@@ -70,7 +69,10 @@ public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
 
     private IUserService _userService;
 
-    public interface IAutoDependencies
+
+}
+*/    
+public interface IAutoDependencies
     {
         Func<DateTime> Now { get; }
         IUserService UserService { get; }
@@ -81,8 +83,6 @@ public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
     {
         void OnLoad(object? sender, EventArgs e);
     }
-}
-
 public interface IUserService { }
 
 public class BaseViewModel_g(SomeDataObject someDataObject, IAutoDependenciesBase dependencies)
