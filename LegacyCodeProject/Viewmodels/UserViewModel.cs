@@ -12,7 +12,6 @@ public class UserViewModel : BaseViewModel
         Name = "Default";
         DateTime = DateTime.Now;
         _userService = new UserService();
-
     }
 
     public string Name
@@ -33,7 +32,7 @@ public class UserViewModel : BaseViewModel
         Name = "Test";
     }
 
-    private UserService _userService; // This is the kind of thing I want to avoid in tests, maybe the source generator can move this to the generated class and make it mockable?
+    private UserService _userService;
 }
 
 // Example of what the generated class would look like:
@@ -42,11 +41,7 @@ public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
     // Auto-generated new members:
     private readonly IAutoDependencies _dependencies;
 
-    public UserViewModel_g(
-        SomeDataObject someDataObject,
-        IAutoDependencies dependencies,
-        IAutoDependenciesBase baseDependencies
-    )
+    public UserViewModel_g(SomeDataObject someDataObject, IAutoDependencies dependencies, IAutoDependenciesBase baseDependencies)
         : base(someDataObject, baseDependencies)
     {
         _dependencies = dependencies;
@@ -61,15 +56,15 @@ public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
         set
         {
             field = value;
-            _dependencies.OnPropertyChanged(); // Huh, I did not think about that, maybe the source generator can copy [CallerMemberName] over?
+            _dependencies.OnPropertyChanged();
         }
     }
 
     public DateTime DateTime { get; set; }
 
-    protected override void OnLoad(object? sender, EventArgs e) // Remove override or create virtual in base class? Should be a virtual method in BaseViewModel_g that calls IAutoDependenciesBase.OnLoad
+    protected override void OnLoad(object? sender, EventArgs e)
     {
-        base.OnLoad(sender, e); // Of _dependencies.OnLoad(sender, e);?
+        base.OnLoad(sender, e); // Or _dependencies.OnLoad(sender, e);?
         Name = "Test";
     }
 
@@ -79,7 +74,7 @@ public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
     {
         Func<DateTime> Now { get; }
         IUserService UserService { get; }
-        void OnPropertyChanged([CallerMemberName] string propertyName = null!); // Is this possible for a sourcegenerator?
+        void OnPropertyChanged([CallerMemberName] string propertyName = null!); // Note, the generator has to check for [CallerMemberName]!
     }
 
     public interface IAutoDependenciesBase
@@ -88,9 +83,7 @@ public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
     }
 }
 
-public interface IUserService
-{
-}
+public interface IUserService { }
 
 public class BaseViewModel_g(SomeDataObject someDataObject, IAutoDependenciesBase dependencies)
 {

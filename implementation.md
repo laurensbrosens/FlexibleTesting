@@ -8,4 +8,7 @@ Steps implementation of sourcegenerator:
 7. Overwrites.Mock<> (spicy)
 8. Implement Overwrites.Include (to allow a common base builder), last because not required
 
+Worst case, I don't use a sourcegenerator and simply run the builder as a script and create a real class
+That way developers can edit it as well
+There should be a unittest at the start that checks for changes in the real file and reruns the builder or something
 
