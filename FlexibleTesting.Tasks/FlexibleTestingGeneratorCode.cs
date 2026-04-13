@@ -1,4 +1,4 @@
-﻿namespace FlexibleTesting.Generators;
+namespace FlexibleTesting.Generators;
 
 public static class FlexibleTestingGeneratorCode
 {

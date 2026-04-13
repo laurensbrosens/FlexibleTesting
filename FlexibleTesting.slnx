@@ -1,6 +1,8 @@
 <Solution>
-  <Project Path="ConsoleApp1/ConsoleApp1.csproj" Id="c3c0556c-d4ce-4141-93f0-4b3c10be2852" />
-  <Project Path="FlexibleTesting/FlexibleTesting.csproj" Id="e712df27-eb1a-45c8-9745-1f1cedc0e619" />
+  <Project Path="FlexibleTesting.Tasks/FlexibleTesting.Tasks.csproj" />
+  <Project Path="FlexibleTesting/FlexibleTesting.csproj" Id="e712df27-eb1a-45c8-9745-1f1cedc0e619">
+    <Build Solution="Debug|*" Project="false" />
+  </Project>
   <Project Path="LegacyCodeProject/LegacyCodeProject.csproj" Id="374a2a63-4dfe-428e-8caa-a7eb96b31b34" />
   <Project Path="LegacyCodeProjectTests/LegacyCodeProjectTests.csproj" Id="066c1f54-8020-43f7-875c-ad99ce2f668b" />
 </Solution>

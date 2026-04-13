@@ -24,14 +24,23 @@
     <PackageReference Include="NUnit3TestAdapter" Version="6.2.0" />
   </ItemGroup>
   <ItemGroup>
-	  <!-- Verwijder de gegenereerde bestanden uit het compilatieproces -->
-	  <Compile Remove="Generated\**\*.g.cs" />
-	  <!-- Optioneel: Zorg dat ze nog wel zichtbaar zijn in de Solution Explorer -->
-      <None Include="Generated\**\*.g.cs" />
-    </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\LegacyCodeProject\LegacyCodeProject.csproj" />
+    <ProjectReference Include="..\FlexibleTesting.Tasks\FlexibleTesting.Tasks.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\$(Configuration)\netstandard2.0\FlexibleTesting.Tasks.dll" Architecture="x64" Runtime="CLR4" />
+
+  <Target Name="GenerateFlexibleTesting" BeforeTargets="BeforeCompile;CoreCompile" DependsOnTargets="ResolveProjectReferences">
+    <FlexibleTestingTask 
+      ProjectFilePath="$(MSBuildProjectFullPath)" 
+      OutputPath="$(MSBuildProjectDirectory)\Generated" 
+      SourceFiles="@(Compile)" 
+      References="@(ReferencePath)" />
+    <ItemGroup>
+      <Compile Include="Generated\**\*.g.cs" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <Using Include="NUnit.Framework" />
   </ItemGroup>

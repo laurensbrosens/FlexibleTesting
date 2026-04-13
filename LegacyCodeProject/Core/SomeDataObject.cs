@@ -9,7 +9,7 @@ public class SomeDataObject
     public int MyProperty1 { get; set; }
     public void Test()
     {
-        var test = new UserViewModel_G(this);
+        // var test = new UserViewModel_G(this);
         var test2 = new UserViewModel(this);
     }
 }

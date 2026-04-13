@@ -7,14 +7,12 @@ using System.Threading;
 
 namespace FlexibleTesting.Generators;
 
-[Generator]
 public class FlexibleTestingGenerator : IIncrementalGenerator
 {
     private void CreateCodeInTarget(IncrementalGeneratorInitializationContext context)
     {
         context.RegisterPostInitializationOutput(ctx =>
         {
-            ctx.AddEmbeddedAttributeDefinition();
             ctx.AddSource($"GeneratorInstructionsAttribute.g.cs", FlexibleTestingGeneratorCode.GeneratorInstructionsAttributeCode);
             ctx.AddSource($"IGeneratorInstructions.g.cs", FlexibleTestingGeneratorCode.GeneratorInstructionsInterfaceCode);
             ctx.AddSource($"Overwrites.g.cs", FlexibleTestingGeneratorCode.OverwritesHelperCode);

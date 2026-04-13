@@ -1,10 +1,8 @@
 ﻿using LegacyCodeProject.Core;
-using System.ComponentModel;
 
 namespace LegacyCodeProject.Viewmodels;
 
-[EditorBrowsable(EditorBrowsableState.Never)]
-internal class UserViewModel : BaseViewModel
+public class UserViewModel : BaseViewModel
 {
     public UserViewModel(SomeDataObject someDataObject)
         : base(someDataObject)

@@ -10,7 +10,7 @@
   </PropertyGroup>
 
 	<ItemGroup>
-		<ProjectReference Include="..\FlexibleTesting\FlexibleTesting.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+		<ProjectReference Include="..\FlexibleTesting\FlexibleTesting.csproj" />
 	</ItemGroup>
 
 	<Target Name="CleanGeneratedFiles" BeforeTargets="BeforeBuild">
