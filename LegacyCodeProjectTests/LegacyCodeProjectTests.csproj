@@ -28,7 +28,7 @@
     <ProjectReference Include="..\FlexibleTesting.Tasks\FlexibleTesting.Tasks.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
-  <UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\$(Configuration)\netstandard2.0\FlexibleTesting.Tasks.dll" Architecture="x64" Runtime="CLR4" />
+  <UsingTask TaskName="FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll" Architecture="x64" Runtime="CLR4" />
 
   <Target Name="GenerateFlexibleTesting" BeforeTargets="BeforeCompile;CoreCompile" DependsOnTargets="ResolveProjectReferences">
     <FlexibleTestingTask 

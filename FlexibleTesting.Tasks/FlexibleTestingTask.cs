@@ -1,16 +1,13 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using Microsoft.Build.Framework;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
-using Microsoft.Build.Utilities;
-using FlexibleTesting.Generators;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
 
 namespace FlexibleTesting.Tasks;
 
@@ -34,7 +31,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         {
             var workspace = new AdhocWorkspace();
             var projectId = ProjectId.CreateNewId();
-            
             var metadataReferences = new List<MetadataReference>();
             foreach (var reference in References)
             {
