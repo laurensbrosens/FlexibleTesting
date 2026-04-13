@@ -25,7 +25,6 @@ public class FlexibleTestingGenerator : IIncrementalGenerator
     {
         CreateCodeInTarget(context);
 
-        // 1. Find classes with your specific attribute
         var targetClasses = context.SyntaxProvider.ForAttributeWithMetadataName(
             fullyQualifiedMetadataName: "FlexibleTesting.GeneratorInstructionsAttribute",
             predicate: IsAttributeOnAClass(),
@@ -36,25 +35,26 @@ public class FlexibleTestingGenerator : IIncrementalGenerator
             targetClasses,
             static (ctx, targetClass) =>
             {
-                GeneratePartialClass(ctx, targetClass);
+                GenerateCopyWithChanges(ctx, targetClass);
             }
         );
     }
 
-    private static System.Func<SyntaxNode, CancellationToken, bool> IsAttributeOnAClass()
-    {
-        return static (s, _) => s is ClassDeclarationSyntax;
-    }
-
-    public static TargetClassData GetTargetClassesToGenerate(GeneratorAttributeSyntaxContext context, CancellationToken ct)
+    public static BuilderClassData GetTargetClassesToGenerate(GeneratorAttributeSyntaxContext context, CancellationToken ct)
     {
         var generatorInstructionsClass = (ClassDeclarationSyntax)context.TargetNode;
-        var configureMethod = generatorInstructionsClass.Members.OfType<MethodDeclarationSyntax>().FirstOrDefault(m => m.Identifier.Text == "Configure");
+        var configureMethod = generatorInstructionsClass
+            .Members.OfType<MethodDeclarationSyntax>()
+            .FirstOrDefault(m => m.Identifier.Text == "Configure");
 
         if (configureMethod?.Body == null)
+        {
             return default;
+        }
 
-        // We verzamelen hier de methoden die we public moeten maken
+        var builderNameSpace = context.TargetSymbol.ContainingNamespace.ToDisplayString();
+        var builderClass = generatorInstructionsClass.Identifier.Text;
+        var builderData = new BuilderClassData(builderNameSpace, builderClass, default);
         var methodsToMakePublic = new List<IMethodSymbol>();
         ITypeSymbol targetTypeSymbol = null;
 
@@ -63,40 +63,19 @@ public class FlexibleTestingGenerator : IIncrementalGenerator
         foreach (var invocation in invocations)
         {
             var symbol = context.SemanticModel.GetSymbolInfo(invocation, ct).Symbol as IMethodSymbol;
-            if (symbol == null || symbol.ContainingType?.Name != "Overwrites")
+            if (symbol == null || symbol.ContainingType?.Name != nameof(Overwrites))
                 continue;
 
-            // 1. Zoek naar ForClass<T>
-            if (symbol.Name == "ForClass" && symbol.IsGenericMethod)
+            switch (symbol.Name)
             {
-                targetTypeSymbol = symbol.TypeArguments.FirstOrDefault();
-            }
-
-            // 2. Zoek naar MakePublic<TInterface, TDelegate>(x => x.Method)
-            if (symbol.Name == "MakePublic" && invocation.ArgumentList.Arguments.Count > 0)
-            {
-                var argument = invocation.ArgumentList.Arguments[0].Expression;
-
-                // Haal de lambda op (zowel x => x.Method als () => Method)
-                if (argument is LambdaExpressionSyntax lambda)
-                {
-                    // We proberen het symbool te vinden van de body van de lambda
-                    // Dit werkt voor: x => x.Method, () => Method, en () => Method()
-                    SyntaxNode nodeToInspect = lambda.Body;
-
-                    // Als de body een aanroep is, bijv. () => Method(), inspecteer dan de methode zelf
-                    if (nodeToInspect is InvocationExpressionSyntax invocationBody)
-                    {
-                        nodeToInspect = invocationBody.Expression;
-                    }
-
-                    var methodSymbol = context.SemanticModel.GetSymbolInfo(nodeToInspect, ct).Symbol as IMethodSymbol;
-
-                    if (methodSymbol != null)
-                    {
-                        methodsToMakePublic.Add(methodSymbol);
-                    }
-                }
+                case nameof(Overwrites.ForClass): // && symbol.IsGenericMethod?
+                    targetTypeSymbol = AddForClass(symbol);
+                    break;
+                case nameof(Overwrites.MakePublic): // && invocation.ArgumentList.Arguments.Count > 0
+                    AddToMakePublic(context, methodsToMakePublic, invocation, ct);
+                    break;
+                default:
+                    break;
             }
         }
 
@@ -111,36 +90,72 @@ public class FlexibleTestingGenerator : IIncrementalGenerator
             var newName = $"{oldName}_G";
 
             var root = classNode.SyntaxTree.GetRoot(ct);
-            // Gebruik de uitgebreide rewriter
             var targetSemanticModel = context.SemanticModel.Compilation.GetSemanticModel(classNode.SyntaxTree);
             var rewriter = new ClassRenamer(targetSemanticModel, oldName, newName, methodsToMakePublic);
             var newRoot = rewriter.Visit(root);
 
-            return new TargetClassData(targetTypeSymbol.ContainingNamespace.ToDisplayString(), oldName, newRoot.ToFullString());
+            return builderData with
+            {
+                target = new TargetClassData(targetTypeSymbol.ContainingNamespace.ToDisplayString(), oldName, newRoot.ToFullString()),
+            };
         }
 
         return default;
     }
 
-    private static void GeneratePartialClass(SourceProductionContext context, TargetClassData targetData)
+    private static ITypeSymbol AddForClass(IMethodSymbol symbol)
     {
-        // Handle global namespaces gracefully
-        string namespaceDeclaration = string.IsNullOrEmpty(targetData.Namespace) ? "" : $"namespace {targetData.Namespace};";
+        return symbol.TypeArguments.FirstOrDefault();
+    }
 
-        // Create the source code
-        // Note: We use "partial" here so it merges with the original UserViewModel
+    private static void AddToMakePublic(
+        GeneratorAttributeSyntaxContext context,
+        List<IMethodSymbol> methodsToMakePublic,
+        InvocationExpressionSyntax invocation,
+        CancellationToken ct
+    )
+    {
+        var argument = invocation.ArgumentList.Arguments[0].Expression;
+
+        // Check for "x => x.Method" and "() => Method"
+        if (argument is not LambdaExpressionSyntax lambda)
+        {
+            throw new System.Exception("Invalid lambda expression"); // TODO: add diagnostics instead of exception.
+        }
+
+        // Find symbol in lambda. If something like "() => Method()", inspect the expression itself
+        SyntaxNode nodeToInspect = lambda.Body is InvocationExpressionSyntax invocationBody ? invocationBody.Expression : lambda.Body;
+
+        var methodSymbol = context.SemanticModel.GetSymbolInfo(nodeToInspect, ct).Symbol as IMethodSymbol;
+
+        if (methodSymbol != null)
+        {
+            methodsToMakePublic.Add(methodSymbol);
+        }
+    }
+
+    private static void GenerateCopyWithChanges(SourceProductionContext context, BuilderClassData targetData)
+    {
         string source = $$"""
             // <auto-generated/>
-            {{targetData.FullContent}}
+            {{targetData.target.FullContent}}
             """;
+        const string ClassNameSuffix = "_G";
+        context.AddSource($"{targetData.ClassName}{ClassNameSuffix}.g.cs", source);
+    }
 
-        // Add the source file to the compilation
-        // We use the class name as the filename (e.g., UserViewModel_Generated.g.cs)
-        context.AddSource($"{targetData.ClassName}_G.g.cs", source);
+    private static System.Func<SyntaxNode, CancellationToken, bool> IsAttributeOnAClass()
+    {
+        return static (s, _) => s is ClassDeclarationSyntax;
     }
 }
 
 public record struct TargetClassData(string Namespace, string ClassName, string FullContent);
+
+/// <summary>
+/// Immutable structure corresponding to the Builder with the instructions
+/// </summary>
+public record struct BuilderClassData(string Namespace, string ClassName, TargetClassData target);
 
 public class ClassRenamer : CSharpSyntaxRewriter
 {
@@ -199,9 +214,14 @@ public class ClassRenamer : CSharpSyntaxRewriter
             var leadingTrivia = node.Modifiers.Count > 0 ? node.Modifiers.First().LeadingTrivia : node.ReturnType.GetLeadingTrivia();
 
             // 3. Filter modifiers
-            var otherModifiers = node.Modifiers.Where(m => !m.IsKind(SyntaxKind.PrivateKeyword) && !m.IsKind(SyntaxKind.ProtectedKeyword)).ToList();
+            var otherModifiers = node
+                .Modifiers.Where(m => !m.IsKind(SyntaxKind.PrivateKeyword) && !m.IsKind(SyntaxKind.ProtectedKeyword))
+                .ToList();
 
-            var publicToken = SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithLeadingTrivia(leadingTrivia).WithTrailingTrivia(SyntaxFactory.Space);
+            var publicToken = SyntaxFactory
+                .Token(SyntaxKind.PublicKeyword)
+                .WithLeadingTrivia(leadingTrivia)
+                .WithTrailingTrivia(SyntaxFactory.Space);
 
             // 4. Voeg het commentaar toe aan het einde van de parameterlijst (ParameterList.GetTrailingTrivia)
             // of aan de SemicolonToken als het een abstracte/interface methode is.
@@ -215,27 +235,5 @@ public class ClassRenamer : CSharpSyntaxRewriter
         }
 
         return base.VisitMethodDeclaration(node);
-    }
-}
-
-public static class MethodSymbolExtensions
-{
-    public static string ToSignatureString(this IMethodSymbol symbol)
-    {
-        if (symbol == null)
-            return string.Empty;
-
-        // We gebruiken een format die alleen naar de 'inhoud' van de methode kijkt
-        var format = new SymbolDisplayFormat(
-            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
-            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
-            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
-            memberOptions: SymbolDisplayMemberOptions.IncludeParameters | SymbolDisplayMemberOptions.IncludeType,
-            parameterOptions: SymbolDisplayParameterOptions.IncludeType,
-            miscellaneousOptions: SymbolDisplayMiscellaneousOptions.UseSpecialTypes
-        );
-
-        // Resultaat: "MethodName<T>(ParamType1, ParamType2)"
-        return symbol.ToDisplayString(format);
     }
 }

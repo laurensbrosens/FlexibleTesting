@@ -10,7 +10,7 @@ public class BaseViewModel : INotifyPropertyChanged
         SomeDataObject = someDataObject;
         LoadEvent += OnLoad;
         Console.WriteLine("Parent class side effects");
-        throw new Exception("Can't run this in a unittest");
+        //throw new Exception("Can't run this in a unittest");
     }
 
     public SomeDataObject SomeDataObject

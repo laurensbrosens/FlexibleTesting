@@ -1,5 +1,4 @@
 ﻿using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System;
 using System.Collections.Generic;
@@ -47,7 +46,11 @@ internal sealed class {{AttributeClassName}} : Attribute
             transform: static (ctx, cancellationToken) =>
             {
                 ISymbol classSymbol = ctx.TargetSymbol;
-                return new ClassModel(classSymbol.Name, classSymbol.ContainingNamespace.ToDisplayString(), GetInterfaceModels(ctx.Attributes[0]));
+                return new ClassModel(
+                    classSymbol.Name,
+                    classSymbol.ContainingNamespace.ToDisplayString(),
+                    GetInterfaceModels(ctx.Attributes[0])
+                );
             }
         );
 
