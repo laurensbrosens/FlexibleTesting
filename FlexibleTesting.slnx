@@ -1,5 +1,7 @@
 <Solution>
-  <Project Path="FlexibleTesting.Tasks/FlexibleTesting.Tasks.csproj" />
+  <Project Path="FlexibleTesting.Tasks/FlexibleTesting.Tasks.csproj">
+    <Build Solution="Debug|*" Project="false" />
+  </Project>
   <Project Path="FlexibleTesting/FlexibleTesting.csproj" Id="e712df27-eb1a-45c8-9745-1f1cedc0e619">
     <Build Solution="Debug|*" Project="false" />
   </Project>

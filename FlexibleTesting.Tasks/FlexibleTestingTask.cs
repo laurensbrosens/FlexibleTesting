@@ -1,4 +1,5 @@
 using Microsoft.Build.Framework;
+using Microsoft.Build.Utilities;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -11,7 +12,7 @@ using System.Text;
 
 namespace FlexibleTesting.Tasks;
 
-public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
+public class FlexibleTestingTask : Task
 {
     [Required]
     public string ProjectFilePath { get; set; } = string.Empty;
@@ -19,10 +20,10 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     [Required]
     public string OutputPath { get; set; } = string.Empty;
 
-    [Required]
+    //[Required]
     public ITaskItem[] SourceFiles { get; set; } = Array.Empty<ITaskItem>();
 
-    [Required]
+    //[Required]
     public ITaskItem[] References { get; set; } = Array.Empty<ITaskItem>();
 
     public override bool Execute()
@@ -48,7 +49,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 Path.GetFileNameWithoutExtension(ProjectFilePath),
                 LanguageNames.CSharp,
                 filePath: ProjectFilePath,
-                metadataReferences: metadataReferences);
+                metadataReferences: metadataReferences
+            );
 
             var solution = workspace.CurrentSolution.AddProject(projectInfo);
 
@@ -61,8 +63,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     var documentInfo = DocumentInfo.Create(
                         documentId,
                         Path.GetFileName(filePath),
-                        loader: TextLoader.From(TextAndVersion.Create(SourceText.From(File.ReadAllText(filePath), Encoding.UTF8), VersionStamp.Create())),
-                        filePath: filePath);
+                        loader: TextLoader.From(
+                            TextAndVersion.Create(SourceText.From(File.ReadAllText(filePath), Encoding.UTF8), VersionStamp.Create())
+                        ),
+                        filePath: filePath
+                    );
                     solution = solution.AddDocument(documentInfo);
                 }
             }
@@ -94,16 +99,24 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 foreach (var classNode in classes)
                 {
                     var symbol = semanticModel.GetDeclaredSymbol(classNode);
-                    if (symbol == null) continue;
+                    if (symbol == null)
+                        continue;
 
-                    if (generatorInstructionsAttribute != null && symbol.GetAttributes().Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, generatorInstructionsAttribute)))
+                    if (
+                        generatorInstructionsAttribute != null
+                        && symbol
+                            .GetAttributes()
+                            .Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, generatorInstructionsAttribute))
+                    )
                     {
                         GenerateForFlexibleTesting(compilation, semanticModel, classNode, symbol);
                     }
 
                     if (autoImplementAttribute != null)
                     {
-                        var attr = symbol.GetAttributes().FirstOrDefault(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, autoImplementAttribute));
+                        var attr = symbol
+                            .GetAttributes()
+                            .FirstOrDefault(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, autoImplementAttribute));
                         if (attr != null)
                         {
                             GenerateForAutoImplement(classNode, symbol, attr);
@@ -121,10 +134,16 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return !Log.HasLoggedErrors;
     }
 
-    private void GenerateForFlexibleTesting(Compilation compilation, SemanticModel semanticModel, ClassDeclarationSyntax classNode, INamedTypeSymbol symbol)
+    private void GenerateForFlexibleTesting(
+        Compilation compilation,
+        SemanticModel semanticModel,
+        ClassDeclarationSyntax classNode,
+        INamedTypeSymbol symbol
+    )
     {
         var configureMethod = classNode.Members.OfType<MethodDeclarationSyntax>().FirstOrDefault(m => m.Identifier.Text == "Configure");
-        if (configureMethod?.Body == null) return;
+        if (configureMethod?.Body == null)
+            return;
 
         var methodsToMakePublic = new List<IMethodSymbol>();
         ITypeSymbol? targetTypeSymbol = null;
@@ -151,7 +170,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         if (targetTypeSymbol != null && targetTypeSymbol.TypeKind != TypeKind.Error)
         {
             var syntaxReference = targetTypeSymbol.DeclaringSyntaxReferences.FirstOrDefault();
-            if (syntaxReference == null) return;
+            if (syntaxReference == null)
+                return;
 
             var targetClassNode = (ClassDeclarationSyntax)syntaxReference.GetSyntax();
             var oldName = targetClassNode.Identifier.Text;
@@ -177,7 +197,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
     private void GenerateForAutoImplement(ClassDeclarationSyntax classNode, INamedTypeSymbol classSymbol, AttributeData attribute)
     {
-        if (attribute.ConstructorArguments.Length == 0) return;
+        if (attribute.ConstructorArguments.Length == 0)
+            return;
 
         foreach (TypedConstant constructorArgumentValue in attribute.ConstructorArguments[0].Values)
         {
@@ -202,9 +223,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     // <auto-generated/>
                     namespace {{classSymbol.ContainingNamespace.ToDisplayString()}};
 
-                    public partial class {{classSymbol.Name}} : {{interfaceSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}}
+                    public partial class {{classSymbol.Name}} : {{interfaceSymbol.ToDisplayString(
+                        SymbolDisplayFormat.FullyQualifiedFormat
+                    )}}
                     {
-
+                    
                     """
                 );
 
@@ -225,9 +248,14 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }
     }
 
-    private void AddToMakePublic(SemanticModel semanticModel, List<IMethodSymbol> methodsToMakePublic, InvocationExpressionSyntax invocation)
+    private void AddToMakePublic(
+        SemanticModel semanticModel,
+        List<IMethodSymbol> methodsToMakePublic,
+        InvocationExpressionSyntax invocation
+    )
     {
-        if (invocation.ArgumentList.Arguments.Count == 0) return;
+        if (invocation.ArgumentList.Arguments.Count == 0)
+            return;
         var argument = invocation.ArgumentList.Arguments[0].Expression;
 
         if (argument is LambdaExpressionSyntax lambda)

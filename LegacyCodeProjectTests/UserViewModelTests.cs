@@ -1,5 +1,4 @@
 ﻿using LegacyCodeProject.Core;
-using LegacyCodeProject.Viewmodels;
 
 namespace LegacyCodeProjectTests;
 
