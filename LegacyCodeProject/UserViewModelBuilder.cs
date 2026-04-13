@@ -5,7 +5,7 @@ using LegacyCodeProject.Viewmodels;
 namespace LegacyCodeProjectTests;
 
 [GeneratorInstructions(typeof(IGeneratorInstructions))]
-public class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewModel(someDataObject)
+internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewModel(someDataObject)
 {
     public void Configure()
     {

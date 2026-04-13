@@ -23,11 +23,15 @@
     </PackageReference>
     <PackageReference Include="NUnit3TestAdapter" Version="6.2.0" />
   </ItemGroup>
-
+  <ItemGroup>
+	  <!-- Verwijder de gegenereerde bestanden uit het compilatieproces -->
+	  <Compile Remove="Generated\**\*.g.cs" />
+	  <!-- Optioneel: Zorg dat ze nog wel zichtbaar zijn in de Solution Explorer -->
+      <None Include="Generated\**\*.g.cs" />
+    </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\LegacyCodeProject\LegacyCodeProject.csproj" />
   </ItemGroup>
-
   <ItemGroup>
     <Using Include="NUnit.Framework" />
   </ItemGroup>

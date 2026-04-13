@@ -12,3 +12,29 @@ Worst case, I don't use a sourcegenerator and simply run the builder as a script
 That way developers can edit it as well
 There should be a unittest at the start that checks for changes in the real file and reruns the builder or something
 
+Possible ways to circumvent the namespace pollution problem:
+* Change namespace to .Generated. (only partial solution)
+* Don't use sourcegenerator, use a custom MSBuild codegen step (Roslyn MSBuildWorkspace?)
+* <AdditionalFiles Include="..\ProjectA\**\*.cs" /> (ugly hack)
+
+MSBuildWorkspace?:
+<ItemGroup>
+  <!-- Path to Project A (or pass it via a property) -->
+  <_ProjectA Include="..\ProjectA\ProjectA.csproj" />
+</ItemGroup>
+
+<Target Name="GenerateFromProjectA"
+        BeforeTargets="CoreCompile"
+        Inputs="@(_ProjectA)"
+        Outputs="$(IntermediateOutputPath)Generated\FromA.g.cs">
+
+  <MakeDir Directories="$(IntermediateOutputPath)Generated" />
+
+  <Exec Command='dotnet run --project ..\Tools\MyGen\MyGen.csproj -- "@(_ProjectA)" "$(IntermediateOutputPath)Generated\FromA.g.cs"' />
+
+  <ItemGroup>
+    <Compile Include="$(IntermediateOutputPath)Generated\FromA.g.cs"
+             AutoGen="True"
+             DesignTime="True" />
+  </ItemGroup>
+</Target>

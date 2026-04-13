@@ -5,10 +5,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+	<EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+	<CompilerGeneratedFilesOutputPath>..\LegacyCodeProjectTests\Generated</CompilerGeneratedFilesOutputPath>
   </PropertyGroup>
 
 	<ItemGroup>
 		<ProjectReference Include="..\FlexibleTesting\FlexibleTesting.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 	</ItemGroup>
+
+	<Target Name="CleanGeneratedFiles" BeforeTargets="BeforeBuild">
+		<RemoveDir Directories="$(CompilerGeneratedFilesOutputPath)" />
+	</Target>
 
 </Project>
