@@ -23,23 +23,38 @@
     </PackageReference>
     <PackageReference Include="NUnit3TestAdapter" Version="6.2.0" />
   </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\LegacyCodeProject\LegacyCodeProject.csproj" />
-    <ProjectReference Include="..\FlexibleTesting\FlexibleTesting.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\LegacyCodeProject\LegacyCodeProject.csproj" />
+		<ProjectReference Include="..\FlexibleTesting\FlexibleTesting.csproj" />
+	</ItemGroup>
 
-  <UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll" />
+	<ItemGroup>
+		<!-- Feed Project A sources to the task (no need to edit Project A) -->
+		<LegacyCodeSources Include="..\LegacyCodeProject\**\*.cs"
+						   Exclude="..\LegacyCodeProject\bin\**\*;..\LegacyCodeProject\obj\**\*;..\LegacyCodeProject\**\*.g.cs" />
+	</ItemGroup>
 
-  <Target Name="GenerateFlexibleTesting" BeforeTargets="BeforeCompile;CoreCompile" DependsOnTargets="ResolveProjectReferences">
-    <FlexibleTestingTask 
-      ProjectFilePath="$(MSBuildProjectFullPath)" 
-      OutputPath="$(MSBuildProjectDirectory)\Generated" 
-      SourceFiles="@(Compile)" 
-      References="@(ReferencePath)" />
-    <ItemGroup>
-      <Compile Include="Generated\**\*.g.cs" />
-    </ItemGroup>
-  </Target>
+	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask"
+			   AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll"
+			   TaskFactory="TaskHostFactory" />
+
+	<Target Name="GenerateFlexibleTesting"
+			BeforeTargets="CoreCompile"
+			AfterTargets="ResolveReferences;ResolveProjectReferences">
+
+		<FlexibleTestingTask
+		  ProjectFilePath="$(MSBuildProjectFullPath)"
+		  OutputPath="$(MSBuildProjectDirectory)\Generated"
+		  SourceFiles="@(Compile)"
+		  References="@(ReferencePath)"
+		  LegacySourceFiles="@(LegacyCodeSources)"
+		  LegacyAssemblyName="LegacyCodeProject"
+		  DefineConstants="$(DefineConstants)" />
+
+		<ItemGroup>
+			<Compile Include="Generated\**\*.g.cs" />
+		</ItemGroup>
+	</Target>
 
   <ItemGroup>
     <Using Include="NUnit.Framework" />

@@ -20,79 +20,114 @@ public class FlexibleTestingTask : Task
     [Required]
     public string OutputPath { get; set; } = string.Empty;
 
-    //[Required]
+    [Required]
     public ITaskItem[] SourceFiles { get; set; } = Array.Empty<ITaskItem>();
 
-    //[Required]
+    [Required]
     public ITaskItem[] References { get; set; } = Array.Empty<ITaskItem>();
+
+    // Project A sources (LegacyCodeProject)
+    public ITaskItem[] LegacySourceFiles { get; set; } = Array.Empty<ITaskItem>();
+
+    // Assembly name of Project A, e.g. "LegacyCodeProject" (used to filter out its DLL from references)
+    public string LegacyAssemblyName { get; set; } = string.Empty;
+
+    // Optional, but helps parsing when you use #if in code
+    public string DefineConstants { get; set; } = string.Empty;
 
     public override bool Execute()
     {
         try
         {
-            var workspace = new AdhocWorkspace();
-            var projectId = ProjectId.CreateNewId();
-            var metadataReferences = new List<MetadataReference>();
-            foreach (var reference in References)
-            {
-                var filePath = reference.GetMetadata("FullPath");
-                if (File.Exists(filePath))
-                {
-                    metadataReferences.Add(MetadataReference.CreateFromFile(filePath));
-                }
-            }
+            OutputPath = Path.GetFullPath(OutputPath);
 
-            var projectInfo = ProjectInfo.Create(
-                projectId,
-                VersionStamp.Create(),
-                Path.GetFileNameWithoutExtension(ProjectFilePath),
-                Path.GetFileNameWithoutExtension(ProjectFilePath),
-                LanguageNames.CSharp,
-                filePath: ProjectFilePath,
-                metadataReferences: metadataReferences
+            var parseOptions = CreateParseOptions(DefineConstants);
+            var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
+
+            var metadataReferencesForB = CreateMetadataReferences(References, excludeAssemblyName: null);
+            var metadataReferencesForLegacy = CreateMetadataReferences(
+                References,
+                excludeAssemblyName: string.IsNullOrWhiteSpace(LegacyAssemblyName) ? null : LegacyAssemblyName
             );
 
-            var solution = workspace.CurrentSolution.AddProject(projectInfo);
+            var workspace = new AdhocWorkspace();
 
-            foreach (var sourceFile in SourceFiles)
+            // Project B (the project being built)
+            var projectBId = ProjectId.CreateNewId();
+            var projectBInfo = ProjectInfo.Create(
+                projectBId,
+                VersionStamp.Create(),
+                name: Path.GetFileNameWithoutExtension(ProjectFilePath),
+                assemblyName: Path.GetFileNameWithoutExtension(ProjectFilePath),
+                language: LanguageNames.CSharp,
+                filePath: ProjectFilePath,
+                compilationOptions: compilationOptions,
+                parseOptions: parseOptions,
+                metadataReferences: metadataReferencesForB
+            );
+
+            var solution = workspace.CurrentSolution.AddProject(projectBInfo);
+            solution = AddDocuments(solution, projectBId, SourceFiles);
+
+            // Project A (Legacy) as a second Roslyn project built from source files
+            Compilation? legacyCompilation = null;
+            if (LegacySourceFiles.Length > 0)
             {
-                var filePath = sourceFile.GetMetadata("FullPath");
-                if (File.Exists(filePath))
+                var legacyProjectId = ProjectId.CreateNewId();
+
+                var legacyProjectInfo = ProjectInfo.Create(
+                    legacyProjectId,
+                    VersionStamp.Create(),
+                    name: "LegacyCodeProject_Source",
+                    assemblyName: "LegacyCodeProject_Source",
+                    language: LanguageNames.CSharp,
+                    filePath: null,
+                    compilationOptions: compilationOptions,
+                    parseOptions: parseOptions,
+                    metadataReferences: metadataReferencesForLegacy
+                );
+
+                solution = solution.AddProject(legacyProjectInfo);
+                solution = AddDocuments(solution, legacyProjectId, LegacySourceFiles);
+
+                var legacyProject = solution.GetProject(legacyProjectId);
+                legacyCompilation = legacyProject?.GetCompilationAsync().GetAwaiter().GetResult();
+                if (legacyCompilation == null)
                 {
-                    var documentId = DocumentId.CreateNewId(projectId);
-                    var documentInfo = DocumentInfo.Create(
-                        documentId,
-                        Path.GetFileName(filePath),
-                        loader: TextLoader.From(
-                            TextAndVersion.Create(SourceText.From(File.ReadAllText(filePath), Encoding.UTF8), VersionStamp.Create())
-                        ),
-                        filePath: filePath
-                    );
-                    solution = solution.AddDocument(documentInfo);
+                    Log.LogError("Could not create compilation for LegacySourceFiles. DeclaringSyntaxReferences for Project A types will not work.");
                 }
             }
-
-            var project = solution.GetProject(projectId);
-            if (project == null)
+            else
             {
-                Log.LogError("Could not get project from solution.");
+                Log.LogMessage(MessageImportance.Low, "LegacySourceFiles not provided; cannot resolve Project A types to source.");
+            }
+
+            var projectB = solution.GetProject(projectBId);
+            if (projectB == null)
+            {
+                Log.LogError("Could not get Project B from AdhocWorkspace solution.");
                 return false;
             }
 
-            var compilation = project.GetCompilationAsync().GetAwaiter().GetResult();
-
-            if (compilation == null)
+            var compilationB = projectB.GetCompilationAsync().GetAwaiter().GetResult();
+            if (compilationB == null)
             {
-                Log.LogError("Could not get compilation for project.");
+                Log.LogError("Could not get compilation for Project B.");
                 return false;
             }
 
-            var generatorInstructionsAttribute = compilation.GetTypeByMetadataName("FlexibleTesting.GeneratorInstructionsAttribute");
-            var autoImplementAttribute = compilation.GetTypeByMetadataName("FlexibleTesting.AutoImplementPropertiesAttribute");
+            var generatorInstructionsAttribute =
+                compilationB.GetTypeByMetadataName("FlexibleTesting.GeneratorInstructionsAttribute");
 
-            foreach (var syntaxTree in compilation.SyntaxTrees)
+            if (generatorInstructionsAttribute == null)
             {
-                var semanticModel = compilation.GetSemanticModel(syntaxTree);
+                Log.LogError("Could not find FlexibleTesting.GeneratorInstructionsAttribute in Project B compilation.");
+                return false;
+            }
+
+            foreach (var syntaxTree in compilationB.SyntaxTrees)
+            {
+                var semanticModel = compilationB.GetSemanticModel(syntaxTree);
                 var root = syntaxTree.GetRoot();
                 var classes = root.DescendantNodes().OfType<ClassDeclarationSyntax>();
 
@@ -102,170 +137,269 @@ public class FlexibleTestingTask : Task
                     if (symbol == null)
                         continue;
 
-                    if (
-                        generatorInstructionsAttribute != null
-                        && symbol
-                            .GetAttributes()
-                            .Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, generatorInstructionsAttribute))
-                    )
+                    if (symbol.GetAttributes().Any(a =>
+                            SymbolEqualityComparer.Default.Equals(a.AttributeClass, generatorInstructionsAttribute)))
                     {
-                        GenerateForFlexibleTesting(compilation, semanticModel, classNode, symbol);
-                    }
-
-                    if (autoImplementAttribute != null)
-                    {
-                        var attr = symbol
-                            .GetAttributes()
-                            .FirstOrDefault(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, autoImplementAttribute));
-                        if (attr != null)
-                        {
-                            GenerateForAutoImplement(classNode, symbol, attr);
-                        }
+                        GenerateForFlexibleTesting(compilationB, legacyCompilation, semanticModel, classNode, symbol);
                     }
                 }
             }
+
+            return !Log.HasLoggedErrors;
         }
         catch (Exception ex)
         {
-            Log.LogErrorFromException(ex);
+            Log.LogErrorFromException(ex, showStackTrace: true);
             return false;
         }
-
-        return !Log.HasLoggedErrors;
     }
 
     private void GenerateForFlexibleTesting(
-        Compilation compilation,
-        SemanticModel semanticModel,
+        Compilation compilationB,
+        Compilation? compilationLegacy,
+        SemanticModel semanticModelB,
         ClassDeclarationSyntax classNode,
-        INamedTypeSymbol symbol
-    )
+        INamedTypeSymbol builderInstructionsSymbol)
     {
-        var configureMethod = classNode.Members.OfType<MethodDeclarationSyntax>().FirstOrDefault(m => m.Identifier.Text == "Configure");
-        if (configureMethod?.Body == null)
-            return;
+        var configureMethod = classNode.Members
+            .OfType<MethodDeclarationSyntax>()
+            .FirstOrDefault(m => m.Identifier.Text == "Configure");
 
-        var methodsToMakePublic = new List<IMethodSymbol>();
-        ITypeSymbol? targetTypeSymbol = null;
+        if (configureMethod?.Body == null)
+        {
+            Log.LogError($"Configure() method not found (or has no body) in '{builderInstructionsSymbol.ToDisplayString()}'.");
+            return;
+        }
+
+        var methodsToMakePublicFromB = new List<IMethodSymbol>();
+        INamedTypeSymbol? targetTypeFromB = null;
 
         var invocations = configureMethod.Body.DescendantNodes().OfType<InvocationExpressionSyntax>();
-
         foreach (var invocation in invocations)
         {
-            var methodSymbol = semanticModel.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+            var methodSymbol = semanticModelB.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
             if (methodSymbol == null || methodSymbol.ContainingType?.Name != "Overwrites")
                 continue;
 
             switch (methodSymbol.Name)
             {
                 case "ForClass":
-                    targetTypeSymbol = methodSymbol.TypeArguments.FirstOrDefault();
+                    targetTypeFromB = methodSymbol.TypeArguments.FirstOrDefault() as INamedTypeSymbol;
                     break;
+
                 case "MakePublic":
-                    AddToMakePublic(semanticModel, methodsToMakePublic, invocation);
+                    AddToMakePublic(semanticModelB, methodsToMakePublicFromB, invocation);
                     break;
             }
         }
 
-        if (targetTypeSymbol != null && targetTypeSymbol.TypeKind != TypeKind.Error)
+        if (targetTypeFromB == null || targetTypeFromB.TypeKind == TypeKind.Error)
         {
-            var syntaxReference = targetTypeSymbol.DeclaringSyntaxReferences.FirstOrDefault();
-            if (syntaxReference == null)
-                return;
+            Log.LogError("Overwrites.ForClass<TClass>() did not resolve a valid target type.");
+            return;
+        }
 
-            var targetClassNode = (ClassDeclarationSyntax)syntaxReference.GetSyntax();
-            var oldName = targetClassNode.Identifier.Text;
-            var newName = $"{oldName}_G";
+        if (compilationLegacy == null)
+        {
+            Log.LogError("Legacy compilation not available. Pass LegacySourceFiles so we can access DeclaringSyntaxReferences for Project A types.");
+            return;
+        }
 
-            var targetRoot = targetClassNode.SyntaxTree.GetRoot();
-            var targetSemanticModel = compilation.GetSemanticModel(targetClassNode.SyntaxTree);
-            var rewriter = new ClassRenamer(targetSemanticModel, oldName, newName, methodsToMakePublic);
-            var newRoot = rewriter.Visit(targetRoot);
+        // Re-resolve the type in the "legacy source compilation" so it becomes a SOURCE symbol
+        var targetMetadataName = GetTypeMetadataName(targetTypeFromB.OriginalDefinition);
+        var targetTypeInLegacy = compilationLegacy.GetTypeByMetadataName(targetMetadataName);
 
-            var result = $"""
+        if (targetTypeInLegacy == null)
+        {
+            Log.LogError($"Could not find '{targetMetadataName}' in LegacySourceFiles compilation.");
+            return;
+        }
+
+        var typeSyntaxRef = targetTypeInLegacy.DeclaringSyntaxReferences.FirstOrDefault();
+        if (typeSyntaxRef == null)
+        {
+            Log.LogError($"Type '{targetTypeInLegacy.ToDisplayString()}' still has no DeclaringSyntaxReferences. Check that LegacySourceFiles contains the defining .cs file(s).");
+            return;
+        }
+
+        if (typeSyntaxRef.GetSyntax() is not ClassDeclarationSyntax targetClassNode)
+        {
+            Log.LogError($"Declaring syntax for '{targetTypeInLegacy.ToDisplayString()}' was not a class declaration.");
+            return;
+        }
+
+        // IMPORTANT: symbols from compilationB won't match symbols from compilationLegacy,
+        // so map methods-to-make-public by signature.
+        var methodsToMakePublicInLegacy = MapMethodsToLegacy(targetTypeInLegacy, methodsToMakePublicFromB);
+
+        var oldName = targetClassNode.Identifier.Text;
+        var newName = $"{oldName}_G";
+
+        var targetRoot = targetClassNode.SyntaxTree.GetRoot();
+        var legacySemanticModel = compilationLegacy.GetSemanticModel(targetClassNode.SyntaxTree);
+
+        var rewriter = new ClassRenamer(legacySemanticModel, oldName, newName, methodsToMakePublicInLegacy);
+        var newRoot = rewriter.Visit(targetRoot);
+
+        var result = $"""
 // <auto-generated/>
 {newRoot.ToFullString()}
 """;
-            var fileName = $"{oldName}_G.g.cs";
-            var fullPath = Path.Combine(OutputPath, fileName);
 
-            Directory.CreateDirectory(OutputPath);
-            File.WriteAllText(fullPath, result);
-            Log.LogMessage(MessageImportance.High, $"Generated {fullPath}");
+        Directory.CreateDirectory(OutputPath);
+        var fileName = $"{oldName}_G.g.cs";
+        var fullPath = Path.Combine(OutputPath, fileName);
+
+        File.WriteAllText(fullPath, result, Encoding.UTF8);
+        Log.LogMessage(MessageImportance.High, $"Generated {fullPath}");
+    }
+
+    private static List<IMethodSymbol> MapMethodsToLegacy(INamedTypeSymbol legacyType, List<IMethodSymbol> methodsFromB)
+    {
+        var legacyMethods = legacyType.GetMembers().OfType<IMethodSymbol>().ToList();
+        var result = new List<IMethodSymbol>();
+
+        foreach (var mb in methodsFromB)
+        {
+            var match = legacyMethods.FirstOrDefault(ml => MethodsMatch(ml, mb));
+            if (match != null)
+                result.Add(match);
+        }
+
+        return result;
+
+        static bool MethodsMatch(IMethodSymbol legacyMethod, IMethodSymbol methodFromB)
+        {
+            if (!string.Equals(legacyMethod.Name, methodFromB.Name, StringComparison.Ordinal))
+                return false;
+
+            if (legacyMethod.Parameters.Length != methodFromB.Parameters.Length)
+                return false;
+
+            for (int i = 0; i < legacyMethod.Parameters.Length; i++)
+            {
+                var a = legacyMethod.Parameters[i].Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                var b = methodFromB.Parameters[i].Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                if (!string.Equals(a, b, StringComparison.Ordinal))
+                    return false;
+            }
+
+            return true;
         }
     }
 
-    private void GenerateForAutoImplement(ClassDeclarationSyntax classNode, INamedTypeSymbol classSymbol, AttributeData attribute)
+    private static Solution AddDocuments(Solution solution, ProjectId projectId, ITaskItem[] items)
     {
-        if (attribute.ConstructorArguments.Length == 0)
-            return;
-
-        foreach (TypedConstant constructorArgumentValue in attribute.ConstructorArguments[0].Values)
+        foreach (var item in items)
         {
-            if (constructorArgumentValue.Value is INamedTypeSymbol { TypeKind: TypeKind.Interface } interfaceSymbol)
-            {
-                EquatableList<string> properties = new();
+            var filePath = GetItemFullPath(item);
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+                continue;
 
-                foreach (IPropertySymbol interfaceProperty in interfaceSymbol.GetMembers().OfType<IPropertySymbol>())
-                {
-                    string type = interfaceProperty.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                    string setter = interfaceProperty.SetMethod is not null ? "set; " : string.Empty;
+            var documentId = DocumentId.CreateNewId(projectId);
+            var documentInfo = DocumentInfo.Create(
+                documentId,
+                name: Path.GetFileName(filePath),
+                loader: TextLoader.From(
+                    TextAndVersion.Create(SourceText.From(File.ReadAllText(filePath), Encoding.UTF8), VersionStamp.Create())
+                ),
+                filePath: filePath
+            );
 
-                    properties.Add(
-                        $$"""
-                        public {{type}} {{interfaceProperty.Name}} { get; {{setter}}}
-                        """
-                    );
-                }
-
-                StringBuilder sourceBuilder = new(
-                    $$"""
-                    // <auto-generated/>
-                    namespace {{classSymbol.ContainingNamespace.ToDisplayString()}};
-
-                    public partial class {{classSymbol.Name}} : {{interfaceSymbol.ToDisplayString(
-                        SymbolDisplayFormat.FullyQualifiedFormat
-                    )}}
-                    {
-                    
-                    """
-                );
-
-                foreach (string property in properties)
-                {
-                    sourceBuilder.AppendLine($"    {property}");
-                }
-
-                sourceBuilder.AppendLine("}");
-
-                string fileName = $"{classSymbol.Name}_{interfaceSymbol.Name}.g.cs";
-                string fullPath = Path.Combine(OutputPath, fileName);
-
-                Directory.CreateDirectory(OutputPath);
-                File.WriteAllText(fullPath, sourceBuilder.ToString());
-                Log.LogMessage(MessageImportance.High, $"Generated {fullPath}");
-            }
+            solution = solution.AddDocument(documentInfo);
         }
+
+        return solution;
+    }
+
+    private List<MetadataReference> CreateMetadataReferences(ITaskItem[] references, string? excludeAssemblyName)
+    {
+        var list = new List<MetadataReference>();
+
+        foreach (var reference in references)
+        {
+            var filePath = reference.GetMetadata("FullPath");
+            if (string.IsNullOrWhiteSpace(filePath))
+                filePath = reference.ItemSpec;
+
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(excludeAssemblyName))
+            {
+                var name = Path.GetFileNameWithoutExtension(filePath);
+                if (string.Equals(name, excludeAssemblyName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+            }
+
+            list.Add(MetadataReference.CreateFromFile(filePath));
+        }
+
+        return list;
+    }
+
+    private static CSharpParseOptions CreateParseOptions(string defineConstants)
+    {
+        var symbols = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(defineConstants))
+        {
+            // MSBuild DefineConstants usually looks like: "DEBUG;TRACE;SOMETHING"
+            symbols.AddRange(
+                defineConstants
+                    .Split(new[] { ';', ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => s.Trim())
+                    .Where(s => s.Length > 0)
+            );
+        }
+
+        return new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: symbols);
+    }
+
+    // Namespace.Outer+Inner`1
+    private static string GetTypeMetadataName(INamedTypeSymbol symbol)
+    {
+        symbol = symbol.OriginalDefinition;
+
+        var ns = symbol.ContainingNamespace is { IsGlobalNamespace: false }
+            ? symbol.ContainingNamespace.ToDisplayString()
+            : null;
+
+        var typeParts = new Stack<string>();
+        for (INamedTypeSymbol? t = symbol; t != null; t = t.ContainingType)
+            typeParts.Push(t.MetadataName);
+
+        var typeName = string.Join("+", typeParts);
+        return string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
+    }
+
+    private static string GetItemFullPath(ITaskItem item)
+    {
+        var p = item.GetMetadata("FullPath");
+        if (!string.IsNullOrWhiteSpace(p))
+            return p;
+
+        return item.ItemSpec;
     }
 
     private void AddToMakePublic(
         SemanticModel semanticModel,
         List<IMethodSymbol> methodsToMakePublic,
-        InvocationExpressionSyntax invocation
-    )
+        InvocationExpressionSyntax invocation)
     {
         if (invocation.ArgumentList.Arguments.Count == 0)
             return;
+
         var argument = invocation.ArgumentList.Arguments[0].Expression;
 
         if (argument is LambdaExpressionSyntax lambda)
         {
-            SyntaxNode nodeToInspect = lambda.Body is InvocationExpressionSyntax invocationBody ? invocationBody.Expression : lambda.Body;
+            SyntaxNode nodeToInspect =
+                lambda.Body is InvocationExpressionSyntax invocationBody ? invocationBody.Expression : lambda.Body;
+
             var methodSymbol = semanticModel.GetSymbolInfo(nodeToInspect).Symbol as IMethodSymbol;
             if (methodSymbol != null)
-            {
                 methodsToMakePublic.Add(methodSymbol);
-            }
         }
     }
 }
