@@ -10,7 +10,7 @@ public class UserViewModelTests
     public void Constructor_sets_DefaultName()
     {
         // Arrange
-        var mock = Substitute.For<IAutoDependencies>();
+        var mock = Substitute.For<IAutoUserViewModelDependencies>();
         var data = new SomeDataObject();
 
         // Act
@@ -24,7 +24,7 @@ public class UserViewModelTests
     public void OnLoad_sets_Name_to_Test()
     {
         // Arrange
-        var mock = Substitute.For<IAutoDependencies>();
+        var mock = Substitute.For<IAutoUserViewModelDependencies>();
         var data = new SomeDataObject();
         var vm = new UserViewModel_G(data, mock);
         vm.Name = "Before";
@@ -40,7 +40,7 @@ public class UserViewModelTests
     public void Changing_SomeDataObject_property_triggers_LoadEvent()
     {
         // Arrange
-        var mock = Substitute.For<IAutoDependencies>();
+        var mock = Substitute.For<IAutoUserViewModelDependencies>();
         var data = new SomeDataObject();
         var vm = new UserViewModel_G(data, mock);
         

@@ -355,7 +355,7 @@ public class FlexibleTestingTask : Task
                 targetClassName: newName,
                 targetTypeFullName: targetTypeInLegacy.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                 mockables: mockablesFromTest,
-                dependenciesInterfaceName: "IAutoDependencies",
+                dependenciesInterfaceName: $"IAuto{oldName}Dependencies",
                 dependenciesFieldName: "_dependencies",
                 dependenciesParameterName: "dependencies"
             );
