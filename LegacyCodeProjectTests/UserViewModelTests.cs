@@ -1,5 +1,6 @@
 ﻿using LegacyCodeProject.Core;
 using LegacyCodeProject.Viewmodels;
+using NSubstitute;
 
 namespace LegacyCodeProjectTests;
 
@@ -9,10 +10,11 @@ public class UserViewModelTests
     public void Constructor_sets_DefaultName()
     {
         // Arrange
+        var mock = Substitute.For<IAutoDependencies>();
         var data = new SomeDataObject();
 
         // Act
-        var vm = new UserViewModel_G(data);
+        var vm = new UserViewModel_G(data, mock);
 
         // Assert
         Assert.That(vm.Name, Is.EqualTo("Default"));
@@ -22,8 +24,9 @@ public class UserViewModelTests
     public void OnLoad_sets_Name_to_Test()
     {
         // Arrange
+        var mock = Substitute.For<IAutoDependencies>();
         var data = new SomeDataObject();
-        var vm = new UserViewModel_G(data);
+        var vm = new UserViewModel_G(data, mock);
         vm.Name = "Before";
 
         // Act
@@ -37,8 +40,9 @@ public class UserViewModelTests
     public void Changing_SomeDataObject_property_triggers_LoadEvent()
     {
         // Arrange
+        var mock = Substitute.For<IAutoDependencies>();
         var data = new SomeDataObject();
-        var vm = new UserViewModel_G(data);
+        var vm = new UserViewModel_G(data, mock);
         
         bool loadEventFired = false;
         //vm.LoadEvent += (sender, e) => loadEventFired = true;
