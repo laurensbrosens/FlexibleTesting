@@ -186,11 +186,11 @@ public class FlexibleTestingTask : Task
 
             if (generatorInstructionsAttribute == null)
             {
-                Log.LogError(
+                Log.LogMessage(
                     $"[{TestProjectDisplay}] Could not find FlexibleTesting.GeneratorInstructionsAttribute in the test compilation. "
                         + $"This usually means FlexibleTesting is not referenced/resolved during this build (missing/invalid ReferencePath entries)."
                 );
-                return false;
+                return true; // No attribute found, so nothing to do, but not an error. Just log and exit successfully.
             }
 
             var attributedInstructionClassCount = 0;
