@@ -55,3 +55,4 @@ nunit-*.xml
 .vs/
 
 *.lscache
+LegacyCodeProjectTests/Generated/
