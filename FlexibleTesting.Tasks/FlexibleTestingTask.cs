@@ -351,14 +351,10 @@ public class FlexibleTestingTask : Task
         // Apply Mockable() rewrite(s) + auto dependency injection (IAutoDependencies) if needed
         if (mockablesFromTest.Count > 0 && newRoot is not null)
         {
-            // If the target type (or base types) exposes OnPropertyChanged([CallerMemberName] ...),
-            // we will redirect calls to _dependencies.OnPropertyChanged(...) when dependencies are enabled.
-            var onPropertyChanged = TryGetOnPropertyChangedSignature(targetTypeInLegacy);
-
             var depRewriter = new MockableAndDependenciesRewriter(
                 targetClassName: newName,
+                targetTypeFullName: targetTypeInLegacy.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                 mockables: mockablesFromTest,
-                onPropertyChanged: onPropertyChanged,
                 dependenciesInterfaceName: "IAutoDependencies",
                 dependenciesFieldName: "_dependencies",
                 dependenciesParameterName: "dependencies"
@@ -696,65 +692,11 @@ public class FlexibleTestingTask : Task
         mockables.Add(spec with { DependencyMemberName = finalName });
     }
 
-    private static OnPropertyChangedSignature? TryGetOnPropertyChangedSignature(INamedTypeSymbol targetTypeInLegacy)
-    {
-        // Search base chain for a suitable OnPropertyChanged method
-        IMethodSymbol? best = null;
-
-        for (INamedTypeSymbol? t = targetTypeInLegacy; t != null; t = t.BaseType)
-        {
-            foreach (var m in t.GetMembers("OnPropertyChanged").OfType<IMethodSymbol>())
-            {
-                if (m.MethodKind != MethodKind.Ordinary)
-                    continue;
-
-                if (!m.ReturnsVoid)
-                    continue;
-
-                // Prefer the classic signature: ( [CallerMemberName] string propertyName = null )
-                var hasCaller = m.Parameters.Any(p =>
-                    p.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == "System.Runtime.CompilerServices.CallerMemberNameAttribute"));
-
-                if (best == null)
-                {
-                    best = m;
-                }
-                else
-                {
-                    var bestHasCaller = best.Parameters.Any(p =>
-                        p.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == "System.Runtime.CompilerServices.CallerMemberNameAttribute"));
-
-                    if (!bestHasCaller && hasCaller)
-                        best = m;
-                    else if (bestHasCaller == hasCaller && m.Parameters.Length < best.Parameters.Length)
-                        best = m;
-                }
-            }
-        }
-
-        if (best == null)
-            return null;
-
-        var parameters = best.Parameters.Select(p => new OnPropertyChangedParameter(
-            Name: string.IsNullOrWhiteSpace(p.Name) ? "propertyName" : p.Name,
-            TypeDisplay: p.Type.ToDisplayString(
-                SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier)
-            ),
-            NullableAnnotation: p.Type.NullableAnnotation,
-            HasExplicitDefaultValue: p.HasExplicitDefaultValue,
-            ExplicitDefaultValue: p.HasExplicitDefaultValue ? p.ExplicitDefaultValue : null,
-            HasCallerMemberNameAttribute: p.GetAttributes().Any(a =>
-                a.AttributeClass?.ToDisplayString() == "System.Runtime.CompilerServices.CallerMemberNameAttribute")
-        )).ToList();
-
-        return new OnPropertyChangedSignature(parameters);
-    }
-
     private sealed class MockableAndDependenciesRewriter : CSharpSyntaxRewriter
     {
         private readonly string _targetClassName;
+        private readonly string _targetTypeFullName;
         private readonly IReadOnlyList<MockableSpec> _mockables;
-        private readonly OnPropertyChangedSignature? _onPropertyChanged;
         private readonly string _dependenciesInterfaceName;
         private readonly string _dependenciesFieldName;
         private readonly string _dependenciesParameterName;
@@ -762,19 +704,18 @@ public class FlexibleTestingTask : Task
         private bool _insideTargetClass;
         private bool _addedInterface;
         private bool _needsCallerMemberNameUsing;
-        private bool _usesOnPropertyChanged;
 
         public MockableAndDependenciesRewriter(
             string targetClassName,
+            string targetTypeFullName,
             IReadOnlyList<MockableSpec> mockables,
-            OnPropertyChangedSignature? onPropertyChanged,
             string dependenciesInterfaceName,
             string dependenciesFieldName,
             string dependenciesParameterName)
         {
             _targetClassName = targetClassName;
+            _targetTypeFullName = targetTypeFullName;
             _mockables = mockables;
-            _onPropertyChanged = onPropertyChanged;
             _dependenciesInterfaceName = dependenciesInterfaceName;
             _dependenciesFieldName = dependenciesFieldName;
             _dependenciesParameterName = dependenciesParameterName;
@@ -784,7 +725,6 @@ public class FlexibleTestingTask : Task
         {
             var updated = (CompilationUnitSyntax)base.VisitCompilationUnit(node)!;
 
-            // Add "using System.Runtime.CompilerServices;" if we used [CallerMemberName]
             if (_needsCallerMemberNameUsing)
             {
                 var already = updated.Usings.Any(u => u.Name?.ToString() == "System.Runtime.CompilerServices");
@@ -796,7 +736,6 @@ public class FlexibleTestingTask : Task
                 }
             }
 
-            // If no namespace declaration exists, add interface at compilation unit level
             if (!_addedInterface)
             {
                 var hasTargetClassAtRoot = updated.Members.OfType<ClassDeclarationSyntax>().Any(c => c.Identifier.Text == _targetClassName);
@@ -853,7 +792,6 @@ public class FlexibleTestingTask : Task
 
             _insideTargetClass = prev;
 
-            // Inject: private readonly IAutoDependencies _dependencies;
             if (!visited.Members.OfType<FieldDeclarationSyntax>().Any(f =>
                     f.Declaration.Variables.Any(v => v.Identifier.Text == _dependenciesFieldName)))
             {
@@ -874,7 +812,6 @@ public class FlexibleTestingTask : Task
                 visited = visited.WithMembers(visited.Members.Insert(0, field));
             }
 
-            // Inject constructor parameter + assignment in all ctors
             var newMembers = new List<MemberDeclarationSyntax>(visited.Members.Count);
             foreach (var m in visited.Members)
             {
@@ -893,50 +830,48 @@ public class FlexibleTestingTask : Task
 
         public override SyntaxNode? VisitInvocationExpression(InvocationExpressionSyntax node)
         {
-            // OnPropertyChanged(...) => _dependencies.OnPropertyChanged(...)
-            if (_insideTargetClass && IsOnPropertyChangedInvocation(node))
+            if (!_insideTargetClass) return base.VisitInvocationExpression(node);
+
+            MockableSpec? spec = null;
+            if (node.Expression is IdentifierNameSyntax id)
             {
-                _usesOnPropertyChanged = true;
-                if (_onPropertyChanged?.Parameters.Any(p => p.HasCallerMemberNameAttribute) == true)
+                spec = _mockables.FirstOrDefault(s =>
+                    s.Kind == MockableKind.Method
+                    && s.IsInstanceMember
+                    && s.MemberName == id.Identifier.Text);
+            }
+            else if (node.Expression is MemberAccessExpressionSyntax mae)
+            {
+                var memberName = mae.Name.Identifier.Text;
+                if (mae.Expression is ThisExpressionSyntax)
+                {
+                    spec = _mockables.FirstOrDefault(s =>
+                        s.Kind == MockableKind.Method
+                        && s.IsInstanceMember
+                        && s.MemberName == memberName);
+                }
+                else
+                {
+                    var containingTypeSimple = GetLastIdentifier(mae.Expression);
+                    spec = _mockables.FirstOrDefault(s =>
+                        s.Kind == MockableKind.Method
+                        && s.MemberName == memberName
+                        && s.ContainingTypeSimpleName == containingTypeSimple);
+                }
+            }
+
+            if (spec != null)
+            {
+                if (spec.Parameters.Any(p => p.HasCallerMemberNameAttribute))
                     _needsCallerMemberNameUsing = true;
 
                 var newExpr = SyntaxFactory.MemberAccessExpression(
                     SyntaxKind.SimpleMemberAccessExpression,
                     SyntaxFactory.IdentifierName(_dependenciesFieldName),
-                    SyntaxFactory.IdentifierName("OnPropertyChanged")
+                    SyntaxFactory.IdentifierName(spec.DependencyMemberName)
                 );
 
-                return node.WithExpression(newExpr);
-            }
-
-            // Static method mockables: Guid.NewGuid(...) => _dependencies.NewGuid(...)
-            if (_insideTargetClass && node.Expression is MemberAccessExpressionSyntax mae)
-            {
-                var containingTypeSimple = GetLastIdentifier(mae.Expression);
-                var memberName = mae.Name.Identifier.Text;
-
-                var spec = _mockables.FirstOrDefault(s =>
-                    s.Kind == MockableKind.Method
-                    && s.MemberName == memberName
-                    && s.ContainingTypeSimpleName == containingTypeSimple);
-
-                if (spec != null)
-                {
-                    var newExpr = SyntaxFactory.MemberAccessExpression(
-                        SyntaxKind.SimpleMemberAccessExpression,
-                        SyntaxFactory.IdentifierName(_dependenciesFieldName),
-                        SyntaxFactory.IdentifierName(spec.DependencyMemberName)
-                    );
-
-                    // Keep the original argument list (delegate invocation)
-                    // Add a block comment with original expression (safe before ';')
-                    return node.WithExpression(newExpr)
-                               .WithTrailingTrivia(node.GetTrailingTrivia())
-                               .WithAdditionalAnnotations()
-                               .WithArgumentList(node.ArgumentList)
-                               .WithExpression(newExpr)
-                               .WithTriviaFrom(node);
-                }
+                return node.WithExpression(newExpr).WithTriviaFrom(node);
             }
 
             return base.VisitInvocationExpression(node);
@@ -944,7 +879,6 @@ public class FlexibleTestingTask : Task
 
         public override SyntaxNode? VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
         {
-            // Static property/field mockables: DateTime.Now => _dependencies.Now()
             if (_insideTargetClass)
             {
                 var containingTypeSimple = GetLastIdentifier(node.Expression);
@@ -968,15 +902,13 @@ public class FlexibleTestingTask : Task
                         SyntaxFactory.ArgumentList()
                     );
 
-                    // Use /* */ so we don't accidentally comment-out the semicolon.
-                    var comment = SyntaxFactory.Comment($"// Original: {original}");
+                    var comment = SyntaxFactory.Comment($"/* Original: {original} */");
 
                     return invocation
                         .WithTrailingTrivia(
                             SyntaxFactory.TriviaList(
                                 SyntaxFactory.Space,
-                                comment,
-                                SyntaxFactory.ElasticCarriageReturnLineFeed
+                                comment
                             )
                         )
                         .WithLeadingTrivia(node.GetLeadingTrivia());
@@ -988,7 +920,6 @@ public class FlexibleTestingTask : Task
 
         private ConstructorDeclarationSyntax InjectDependenciesIntoConstructor(ConstructorDeclarationSyntax ctor)
         {
-            // Ensure: ctor(..., IAutoDependencies dependencies)
             var hasParamAlready = ctor.ParameterList.Parameters.Any(p =>
                 p.Type?.ToString() == _dependenciesInterfaceName);
 
@@ -1005,7 +936,6 @@ public class FlexibleTestingTask : Task
                     ctor.ParameterList.AddParameters(newParam)
                 );
 
-                // Add: _dependencies = dependencies;
                 if (ctor.Body != null)
                 {
                     var assignment = SyntaxFactory.ExpressionStatement(
@@ -1016,30 +946,11 @@ public class FlexibleTestingTask : Task
                         )
                     );
 
-                    // Insert as first statement
                     ctor = ctor.WithBody(ctor.Body.WithStatements(ctor.Body.Statements.Insert(0, assignment)));
                 }
             }
 
             return ctor;
-        }
-
-        private bool IsOnPropertyChangedInvocation(InvocationExpressionSyntax node)
-        {
-            // Match:
-            //   OnPropertyChanged(...)
-            //   this.OnPropertyChanged(...)
-            // Do NOT match base.OnPropertyChanged(...) (let base calls stay base calls, unless you decide otherwise later)
-            if (node.Expression is IdentifierNameSyntax id && id.Identifier.Text == "OnPropertyChanged")
-                return true;
-
-            if (node.Expression is MemberAccessExpressionSyntax mae && mae.Name.Identifier.Text == "OnPropertyChanged")
-            {
-                if (mae.Expression is ThisExpressionSyntax)
-                    return true;
-            }
-
-            return false;
         }
 
         private InterfaceDeclarationSyntax BuildDependenciesInterface()
@@ -1048,52 +959,38 @@ public class FlexibleTestingTask : Task
 
             foreach (var m in _mockables)
             {
-                // interface property: global::System.Func<...> Name { get; }
-                var prop = SyntaxFactory.PropertyDeclaration(
-                        SyntaxFactory.ParseTypeName(m.DelegateTypeDisplay),
-                        SyntaxFactory.Identifier(m.DependencyMemberName)
-                    )
-                    .WithAccessorList(
-                        SyntaxFactory.AccessorList(
-                            SyntaxFactory.SingletonList(
-                                SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration)
-                                    .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken))
+                if (m.Kind == MockableKind.Method)
+                {
+                    if (m.Parameters.Any(p => p.HasCallerMemberNameAttribute))
+                        _needsCallerMemberNameUsing = true;
+
+                    var parameters = m.Parameters.Select(BuildParameterSyntax);
+                    var method = SyntaxFactory.MethodDeclaration(
+                            SyntaxFactory.ParseTypeName(m.ReturnTypeDisplay ?? "void"),
+                            SyntaxFactory.Identifier(m.DependencyMemberName)
+                        )
+                        .WithParameterList(SyntaxFactory.ParameterList(SyntaxFactory.SeparatedList(parameters)))
+                        .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken));
+
+                    members.Add(method);
+                }
+                else
+                {
+                    var prop = SyntaxFactory.PropertyDeclaration(
+                            SyntaxFactory.ParseTypeName(m.DelegateTypeDisplay),
+                            SyntaxFactory.Identifier(m.DependencyMemberName)
+                        )
+                        .WithAccessorList(
+                            SyntaxFactory.AccessorList(
+                                SyntaxFactory.SingletonList(
+                                    SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration)
+                                        .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken))
+                                )
                             )
-                        )
-                    );
+                        );
 
-                members.Add(prop);
-            }
-
-            if (_usesOnPropertyChanged)
-            {
-                // If we couldn't resolve the base signature, fallback to the classic one.
-                var sig = _onPropertyChanged ?? new OnPropertyChangedSignature(
-                    Parameters: new List<OnPropertyChangedParameter>
-                    {
-                        new(
-                            Name: "propertyName",
-                            TypeDisplay: "global::System.String",
-                            NullableAnnotation: NullableAnnotation.NotAnnotated,
-                            HasExplicitDefaultValue: true,
-                            ExplicitDefaultValue: null,
-                            HasCallerMemberNameAttribute: true
-                        )
-                    }
-                );
-
-                if (sig.Parameters.Any(p => p.HasCallerMemberNameAttribute))
-                    _needsCallerMemberNameUsing = true;
-
-                var parameters = sig.Parameters.Select(BuildParameterSyntax);
-                var method = SyntaxFactory.MethodDeclaration(
-                        SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.VoidKeyword)),
-                        SyntaxFactory.Identifier("OnPropertyChanged")
-                    )
-                    .WithParameterList(SyntaxFactory.ParameterList(SyntaxFactory.SeparatedList(parameters)))
-                    .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken));
-
-                members.Add(method);
+                    members.Add(prop);
+                }
             }
 
             var iface = SyntaxFactory.InterfaceDeclaration(_dependenciesInterfaceName)
@@ -1124,7 +1021,7 @@ public class FlexibleTestingTask : Task
             return iface;
         }
 
-        private static ParameterSyntax BuildParameterSyntax(OnPropertyChangedParameter p)
+        private static ParameterSyntax BuildParameterSyntax(MockableParameter p)
         {
             var param = SyntaxFactory.Parameter(SyntaxFactory.Identifier(p.Name))
                 .WithType(SyntaxFactory.ParseTypeName(p.TypeDisplay));
@@ -1141,11 +1038,8 @@ public class FlexibleTestingTask : Task
 
             if (p.HasExplicitDefaultValue)
             {
-                // Most important case: default null
                 if (p.ExplicitDefaultValue is null)
                 {
-                    // If the parameter type is non-nullable reference: use null!
-                    // If nullable: use null
                     ExpressionSyntax nullExpr;
                     if (p.NullableAnnotation == NullableAnnotation.Annotated)
                         nullExpr = SyntaxFactory.LiteralExpression(SyntaxKind.NullLiteralExpression);
@@ -1181,7 +1075,6 @@ public class FlexibleTestingTask : Task
                 }
                 else
                 {
-                    // Fallback
                     param = param.WithDefault(SyntaxFactory.EqualsValueClause(SyntaxFactory.IdentifierName("default")));
                 }
             }
@@ -1194,9 +1087,6 @@ public class FlexibleTestingTask : Task
 
         private static string? GetLastIdentifier(ExpressionSyntax expr)
         {
-            // DateTime         -> DateTime
-            // System.DateTime  -> DateTime
-            // global::System.DateTime -> DateTime (parses as AliasQualifiedName inside NameSyntax; but in expressions it often ends up as IdentifierName/MemberAccess chains)
             return expr switch
             {
                 IdentifierNameSyntax id => id.Identifier.Text,
@@ -1215,13 +1105,25 @@ public class FlexibleTestingTask : Task
         Method
     }
 
+    private sealed record MockableParameter(
+        string Name,
+        string TypeDisplay,
+        NullableAnnotation NullableAnnotation,
+        bool HasExplicitDefaultValue,
+        object? ExplicitDefaultValue,
+        bool HasCallerMemberNameAttribute
+    );
+
     private sealed record MockableSpec(
         MockableKind Kind,
         string ContainingTypeSimpleName,
         string ContainingTypeFullName,
         string MemberName,
         string DelegateTypeDisplay,
-        string DependencyMemberName
+        string DependencyMemberName,
+        IReadOnlyList<MockableParameter> Parameters,
+        string? ReturnTypeDisplay,
+        bool IsInstanceMember
     )
     {
         public static MockableSpec? TryCreate(ISymbol symbol)
@@ -1232,6 +1134,7 @@ public class FlexibleTestingTask : Task
 
             var containingTypeSimple = containingType.Name;
             var containingTypeFull = containingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            var isInstance = !symbol.IsStatic;
 
             switch (symbol)
             {
@@ -1242,7 +1145,10 @@ public class FlexibleTestingTask : Task
                         ContainingTypeFullName: containingTypeFull,
                         MemberName: p.Name,
                         DelegateTypeDisplay: BuildDelegateTypeDisplay(Array.Empty<ITypeSymbol>(), p.Type),
-                        DependencyMemberName: p.Name
+                        DependencyMemberName: p.Name,
+                        Parameters: Array.Empty<MockableParameter>(),
+                        ReturnTypeDisplay: p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                        IsInstanceMember: isInstance
                     );
 
                 case IFieldSymbol f:
@@ -1252,22 +1158,39 @@ public class FlexibleTestingTask : Task
                         ContainingTypeFullName: containingTypeFull,
                         MemberName: f.Name,
                         DelegateTypeDisplay: BuildDelegateTypeDisplay(Array.Empty<ITypeSymbol>(), f.Type),
-                        DependencyMemberName: f.Name
+                        DependencyMemberName: f.Name,
+                        Parameters: Array.Empty<MockableParameter>(),
+                        ReturnTypeDisplay: f.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                        IsInstanceMember: isInstance
                     );
 
                 case IMethodSymbol m:
-                    // We support ordinary methods (typically static); delegate signature matches the method signature.
                     if (m.MethodKind != MethodKind.Ordinary)
                         return null;
 
                     var paramTypes = m.Parameters.Select(pp => pp.Type).ToArray();
+                    var parameters = m.Parameters.Select(p => new MockableParameter(
+                        Name: string.IsNullOrWhiteSpace(p.Name) ? "param" : p.Name,
+                        TypeDisplay: p.Type.ToDisplayString(
+                            SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier)
+                        ),
+                        NullableAnnotation: p.Type.NullableAnnotation,
+                        HasExplicitDefaultValue: p.HasExplicitDefaultValue,
+                        ExplicitDefaultValue: p.HasExplicitDefaultValue ? p.ExplicitDefaultValue : null,
+                        HasCallerMemberNameAttribute: p.GetAttributes().Any(a =>
+                            a.AttributeClass?.ToDisplayString() == "System.Runtime.CompilerServices.CallerMemberNameAttribute")
+                    )).ToList();
+
                     return new MockableSpec(
                         Kind: MockableKind.Method,
                         ContainingTypeSimpleName: containingTypeSimple,
                         ContainingTypeFullName: containingTypeFull,
                         MemberName: m.Name,
                         DelegateTypeDisplay: BuildDelegateTypeDisplay(paramTypes, m.ReturnType),
-                        DependencyMemberName: m.Name
+                        DependencyMemberName: m.Name,
+                        Parameters: parameters,
+                        ReturnTypeDisplay: m.ReturnType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                        IsInstanceMember: isInstance
                     );
 
                 default:
@@ -1300,15 +1223,4 @@ public class FlexibleTestingTask : Task
             }
         }
     }
-
-    private sealed record OnPropertyChangedSignature(List<OnPropertyChangedParameter> Parameters);
-
-    private sealed record OnPropertyChangedParameter(
-        string Name,
-        string TypeDisplay,
-        NullableAnnotation NullableAnnotation,
-        bool HasExplicitDefaultValue,
-        object? ExplicitDefaultValue,
-        bool HasCallerMemberNameAttribute
-    );
 }
