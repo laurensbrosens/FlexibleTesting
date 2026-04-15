@@ -69,6 +69,28 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
             Log.LogMessage(MessageImportance.High, $"FlexibleTestingTask running for {TestProjectDisplay}. OutputPath={OutputPath}");
 
+            // Log all input parameters
+            Log.LogMessage(MessageImportance.High, $"Input Parameters:");
+            Log.LogMessage(MessageImportance.High, $"  ProjectFilePath: {ProjectFilePath}");
+            Log.LogMessage(MessageImportance.High, $"  OutputPath: {OutputPath}");
+            Log.LogMessage(MessageImportance.High, $"  SourceFiles count: {SourceFiles.Length}");
+            foreach (var sourceFile in SourceFiles)
+            {
+                Log.LogMessage(MessageImportance.Low, $"    - {GetItemFullPath(sourceFile)}");
+            }
+            Log.LogMessage(MessageImportance.High, $"  References count: {References.Length}");
+            foreach (var reference in References)
+            {
+                Log.LogMessage(MessageImportance.Low, $"    - {reference.GetMetadata("FullPath") ?? reference.ItemSpec}");
+            }
+            Log.LogMessage(MessageImportance.High, $"  LegacySourceFiles count: {LegacySourceFiles.Length}");
+            foreach (var legacySourceFile in LegacySourceFiles)
+            {
+                Log.LogMessage(MessageImportance.Low, $"    - {GetItemFullPath(legacySourceFile)}");
+            }
+            Log.LogMessage(MessageImportance.High, $"  LegacyAssemblyName: {LegacyAssemblyName}");
+            Log.LogMessage(MessageImportance.High, $"  DefineConstants: {DefineConstants}");
+
             if (LegacySourceFiles.Length > 0)
             {
                 Log.LogMessage(MessageImportance.High, $"Legacy sources provided: {LegacyDisplay}");
