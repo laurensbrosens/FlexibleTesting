@@ -145,14 +145,12 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             var parseOptions = CreateParseOptions(DefineConstants);
             var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
 
-            // References for the test project compilation (the project currently being built)
             var metadataReferencesForTestProject = CreateMetadataReferences(
                 References,
                 excludeAssemblyName: null,
                 projectDisplayForLogging: TestProjectDisplay
             );
 
-            // References for the legacy-source compilation (exclude Legacy assembly DLL itself to reduce type-duplication issues)
             var metadataReferencesForLegacySourceCompilation = CreateMetadataReferences(
                 References,
                 excludeAssemblyName: string.IsNullOrWhiteSpace(LegacyAssemblyName) ? null : LegacyAssemblyName,
@@ -160,8 +158,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             );
 
             var workspace = new AdhocWorkspace();
-
-            // "Test project" Roslyn project (built from SourceFiles)
             var testProjectId = ProjectId.CreateNewId();
             var testProjectInfo = ProjectInfo.Create(
                 testProjectId,
@@ -178,15 +174,20 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             var solution = workspace.CurrentSolution.AddProject(testProjectInfo);
             solution = AddDocuments(solution, testProjectId, SourceFiles, expectedRootDirectoryForWarning: TestProjectDirectory, Log);
 
-            // Legacy source compilation as a second Roslyn project built from LegacySourceFiles
+            var globalUsingsPath = TryGetGlobalUsingsFile();
+            if (globalUsingsPath != null && File.Exists(globalUsingsPath))
+            {
+                var usingsContent = File.ReadAllText(globalUsingsPath);
+                var usingsDocId = DocumentId.CreateNewId(testProjectId);
+                solution = solution.AddDocument(usingsDocId, Path.GetFileName(globalUsingsPath), usingsContent, filePath: globalUsingsPath);
+            }
+
             Compilation? legacyCompilation = null;
             string? legacyProjectNameForLogging = null;
 
             if (LegacySourceFiles.Length > 0)
             {
-                legacyProjectNameForLogging =
-                    $"LegacySources_{(string.IsNullOrWhiteSpace(LegacyAssemblyName) ? "Unknown" : LegacyAssemblyName)}";
-
+                legacyProjectNameForLogging = $"LegacySources_{(string.IsNullOrWhiteSpace(LegacyAssemblyName) ? "Unknown" : LegacyAssemblyName)}";
                 var legacyProjectId = ProjectId.CreateNewId();
                 var legacyProjectInfo = ProjectInfo.Create(
                     legacyProjectId,
@@ -203,60 +204,27 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 solution = solution.AddProject(legacyProjectInfo);
                 solution = AddDocuments(solution, legacyProjectId, LegacySourceFiles, expectedRootDirectoryForWarning: null, Log);
 
+                if (globalUsingsPath != null && File.Exists(globalUsingsPath))
+                {
+                    var usingsContent = File.ReadAllText(globalUsingsPath);
+                    var legacyUsingsDocId = DocumentId.CreateNewId(legacyProjectId);
+                    solution = solution.AddDocument(legacyUsingsDocId, Path.GetFileName(globalUsingsPath), usingsContent, filePath: globalUsingsPath);
+                }
+
                 var legacyProject = solution.GetProject(legacyProjectId);
                 legacyCompilation = legacyProject?.GetCompilationAsync().GetAwaiter().GetResult();
-
-                if (legacyCompilation == null)
-                {
-                    Log.LogError(
-                        $"[{TestProjectDisplay}] Could not create compilation for legacy sources ({LegacyDisplay}). "
-                            + $"DeclaringSyntaxReferences for types from '{LegacyAssemblyName}' will not work."
-                    );
-                }
-                else
-                {
-                    Log.LogMessage(
-                        MessageImportance.High,
-                        $"[{TestProjectDisplay}] Legacy compilation created successfully. SyntaxTrees={legacyCompilation.SyntaxTrees.Count()}"
-                    );
-                }
             }
 
             var testProject = solution.GetProject(testProjectId);
-            if (testProject == null)
-            {
-                Log.LogError($"[{TestProjectDisplay}] Could not get Roslyn project from AdhocWorkspace solution.");
-                return false;
-            }
+            if (testProject == null) return false;
 
             var testCompilation = testProject.GetCompilationAsync().GetAwaiter().GetResult();
-            if (testCompilation == null)
-            {
-                Log.LogError($"[{TestProjectDisplay}] Could not get compilation.");
-                return false;
-            }
+            if (testCompilation == null) return false;
 
-            Log.LogMessage(
-                MessageImportance.High,
-                $"[{TestProjectDisplay}] Test compilation created. SyntaxTrees={testCompilation.SyntaxTrees.Count()}"
-            );
-
-            // IMPORTANT:
-            // The attribute is searched in the TEST PROJECT compilation (built from SourceFiles),
-            // not the legacy compilation.
             var generatorInstructionsAttribute = testCompilation.GetTypeByMetadataName("FlexibleTesting.GeneratorInstructionsAttribute");
-
-            if (generatorInstructionsAttribute == null)
-            {
-                Log.LogMessage(
-                    $"[{TestProjectDisplay}] Could not find FlexibleTesting.GeneratorInstructionsAttribute in the test compilation. "
-                        + $"This usually means FlexibleTesting is not referenced/resolved during this build (missing/invalid ReferencePath entries)."
-                );
-                return true; // No attribute found, so nothing to do, but not an error. Just log and exit successfully.
-            }
+            if (generatorInstructionsAttribute == null) return true;
 
             var attributedInstructionClassCount = 0;
-
             foreach (var syntaxTree in testCompilation.SyntaxTrees)
             {
                 var semanticModel = testCompilation.GetSemanticModel(syntaxTree);
@@ -266,33 +234,15 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 foreach (var classNode in classes)
                 {
                     var symbol = semanticModel.GetDeclaredSymbol(classNode);
-                    if (symbol == null)
-                        continue;
+                    if (symbol == null) continue;
 
-                    if (
-                        symbol
-                            .GetAttributes()
-                            .Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, generatorInstructionsAttribute))
-                    )
+                    if (symbol.GetAttributes().Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, generatorInstructionsAttribute)))
                     {
                         attributedInstructionClassCount++;
-                        GenerateForFlexibleTesting(
-                            solution,
-                            testCompilation,
-                            legacyCompilation,
-                            semanticModel,
-                            classNode,
-                            symbol,
-                            legacyProjectNameForLogging
-                        );
+                        GenerateForFlexibleTesting(solution, testCompilation, legacyCompilation, semanticModel, classNode, symbol, legacyProjectNameForLogging);
                     }
                 }
             }
-
-            Log.LogMessage(
-                MessageImportance.High,
-                $"[{TestProjectDisplay}] Found {attributedInstructionClassCount} instruction class(es) with [GeneratorInstructions]."
-            );
 
             return !Log.HasLoggedErrors;
         }
@@ -912,6 +862,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
     private static MockableSpec? GetMockableSpecForNode(SyntaxNode node, SemanticModel semanticModel, IReadOnlyList<MockableSpec> mockables)
     {
+        var test = semanticModel.GetDiagnostics();
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
         if (symbol == null && node is MemberAccessExpressionSyntax mae)
             symbol = semanticModel.GetSymbolInfo(mae.Name).Symbol;
@@ -1426,6 +1377,76 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 var args = string.Join(", ", parameterTypes.Select(TypeDisplay).Concat(new[] { TypeDisplay(returnType) }));
                 return $"global::System.Func<{args}>";
             }
+        }
+    }
+
+    private string? TryGetGlobalUsingsFile()
+    {
+        if (string.IsNullOrWhiteSpace(LegacyProjectPath))
+            return null;
+
+        var legacyProjectDir = Path.GetDirectoryName(LegacyProjectPath);
+        if (string.IsNullOrWhiteSpace(legacyProjectDir))
+            return null;
+
+        var objDir = Path.Combine(legacyProjectDir, "obj");
+        if (!Directory.Exists(objDir))
+        {
+            Log.LogMessage(MessageImportance.Low, $"obj directory not found for legacy project: {objDir}");
+            return null;
+        }
+
+        // Search for any *.GlobalUsings.g.cs file in the obj directory tree
+        try
+        {
+            var globalUsingsFiles = Directory.GetFiles(objDir, "*.GlobalUsings.g.cs", SearchOption.AllDirectories);
+            if (globalUsingsFiles.Length > 0)
+            {
+                // Use the first one found (typically there should be only one)
+                var selectedFile = globalUsingsFiles[0];
+                Log.LogMessage(MessageImportance.High, $"Found GlobalUsings file: {selectedFile}");
+                return selectedFile;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning($"Error searching for GlobalUsings file in {objDir}: {ex.Message}");
+        }
+
+        Log.LogMessage(MessageImportance.Low, "GlobalUsings file not found for legacy project.");
+        return null;
+    }
+
+    private SyntaxTree? GetGlobalUsingsSyntaxTree()
+    {
+        var globalUsingsPath = TryGetGlobalUsingsFile();
+        if (globalUsingsPath == null)
+            return null;
+
+        try
+        {
+            var content = File.ReadAllText(globalUsingsPath);
+            // Parse the entire file but create a new compilation unit with just the usings
+            var tree = CSharpSyntaxTree.ParseText(content, CSharpParseOptions.Default);
+            var root = tree.GetCompilationUnitRoot();
+
+            // Extract just the using directives
+            if (root.Usings.Count > 0)
+            {
+                // Create a new compilation unit with only the using directives
+                var newRoot = SyntaxFactory.CompilationUnit()
+                    .WithUsings(root.Usings);
+
+                var newTree = CSharpSyntaxTree.Create(newRoot);
+                return newTree;
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning($"Could not parse GlobalUsings file: {ex.Message}");
+            return null;
         }
     }
 }
