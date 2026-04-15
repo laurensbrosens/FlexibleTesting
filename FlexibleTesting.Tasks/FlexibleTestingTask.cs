@@ -16,11 +16,9 @@ namespace FlexibleTesting.Tasks;
 
 public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 {
-    [Required]
-    public string ProjectFilePath { get; set; } = string.Empty;
+    public string? ProjectFilePath { get; set; }
 
-    [Required]
-    public string OutputPath { get; set; } = string.Empty;
+    public string? OutputPath { get; set; }
 
     [Required]
     public ITaskItem[] SourceFiles { get; set; } = Array.Empty<ITaskItem>();
@@ -36,6 +34,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     public string LegacyProjectPath { get; set; } = string.Empty;
 
     // Assembly name of legacy project (used to filter out its DLL from references for the legacy source compilation)
+    // If not provided and LegacyProjectPath is set, will be derived from the project filename
     public string LegacyAssemblyName { get; set; } = string.Empty;
 
     // Optional, but helps parsing when you use #if in code
@@ -69,6 +68,24 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     {
         try
         {
+            // Use provided ProjectFilePath or get from MSBuild context
+            if (string.IsNullOrWhiteSpace(ProjectFilePath))
+            {
+                ProjectFilePath = BuildEngine?.ProjectFileOfTaskNode;
+                if (string.IsNullOrWhiteSpace(ProjectFilePath))
+                {
+                    Log.LogError("ProjectFilePath parameter must be provided or task must run within an MSBuild project context.");
+                    return false;
+                }
+            }
+
+            // Use provided OutputPath or default to obj/Generated directory
+            if (string.IsNullOrWhiteSpace(OutputPath))
+            {
+                var projectDir = Path.GetDirectoryName(ProjectFilePath);
+                OutputPath = Path.Combine(projectDir ?? ".", "Generated");
+            }
+
             OutputPath = Path.GetFullPath(OutputPath);
 
             Log.LogMessage(MessageImportance.High, $"FlexibleTestingTask running for {TestProjectDisplay}. OutputPath={OutputPath}");
@@ -80,6 +97,13 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 LegacySourceFiles = discoveredFiles.Select(f => 
                     new Microsoft.Build.Utilities.TaskItem(f) as ITaskItem).ToArray();
                 Log.LogMessage(MessageImportance.High, $"Discovered {LegacySourceFiles.Length} source files from legacy project: {LegacyProjectPath}");
+
+                // If LegacyAssemblyName not provided, derive it from project filename
+                if (string.IsNullOrWhiteSpace(LegacyAssemblyName))
+                {
+                    LegacyAssemblyName = Path.GetFileNameWithoutExtension(LegacyProjectPath);
+                    Log.LogMessage(MessageImportance.High, $"Derived LegacyAssemblyName from project path: {LegacyAssemblyName}");
+                }
             }
 
             // Log all input parameters
