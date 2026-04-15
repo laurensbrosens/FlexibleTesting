@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <!-- Disable parallel builds to prevent MSBuild task DLL locking issues -->
+  <PropertyGroup>
+	<BuildInParallel>false</BuildInParallel>
+  </PropertyGroup>
+</Project>

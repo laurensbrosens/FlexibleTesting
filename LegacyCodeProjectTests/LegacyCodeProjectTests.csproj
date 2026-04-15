@@ -34,10 +34,12 @@
 	</ItemGroup>
 
 	<!-- Visual Studio / Full MSBuild -->
-	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net472\FlexibleTesting.Tasks.dll" Condition="'$(MSBuildRuntimeType)' == 'Full'" />
+	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net472\FlexibleTesting.Tasks.dll" TaskFactory="TaskHostFactory"
+			   Condition="'$(MSBuildRuntimeType)' == 'Full'" />
 
 	<!-- dotnet build / Core MSBuild -->
-	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll" Condition="'$(MSBuildRuntimeType)' != 'Full'" />
+	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll" TaskFactory="TaskHostFactory"
+			   Condition="'$(MSBuildRuntimeType)' != 'Full'" />
 
 	<Target Name="GenerateFlexibleTesting" BeforeTargets="CoreCompile" AfterTargets="ResolveReferences;ResolveProjectReferences">
 
