@@ -25,7 +25,7 @@
   </ItemGroup>
 	<ItemGroup>
 		<ProjectReference Include="..\LegacyCodeProject\LegacyCodeProject.csproj" />
-		<ProjectReference Include="..\FlexibleTesting\FlexibleTesting.csproj" />
+		<ProjectReference Include="..\FlexibleTesting.Tasks\FlexibleTesting.Tasks.csproj" ReferenceOutputAssembly="false" />
 	</ItemGroup>
 
 	<ItemGroup>
@@ -34,14 +34,10 @@
 	</ItemGroup>
 
 	<!-- Visual Studio / Full MSBuild -->
-	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask"
-			   AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net472\FlexibleTesting.Tasks.dll"
-			   Condition="'$(MSBuildRuntimeType)' == 'Full'" />
+	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net472\FlexibleTesting.Tasks.dll" Condition="'$(MSBuildRuntimeType)' == 'Full'" />
 
 	<!-- dotnet build / Core MSBuild -->
-	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask"
-			   AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll"
-			   Condition="'$(MSBuildRuntimeType)' != 'Full'" />
+	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll" Condition="'$(MSBuildRuntimeType)' != 'Full'" />
 
 	<Target Name="GenerateFlexibleTesting" BeforeTargets="CoreCompile" AfterTargets="ResolveReferences;ResolveProjectReferences">
 
