@@ -15,8 +15,8 @@ namespace FlexibleTesting;
 ///
 /// Better alternatives could be:
 /// * DocumentEditor
-/// * SyntaxGenerator
-/// * Renamer
+/// * SyntaxGenerator // Language agnostic syntax generator
+/// * Renamer // Seems identical to the Rename functionality in Visual Studio
 /// </summary>
 public class ClassRenamer : CSharpSyntaxRewriter
 {
