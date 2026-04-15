@@ -3,16 +3,18 @@ using Microsoft.Build.Utilities;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.Text;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace FlexibleTesting.Tasks;
 
-public class FlexibleTestingTask : Task
+public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 {
     [Required]
     public string ProjectFilePath { get; set; } = string.Empty;
@@ -214,6 +216,7 @@ public class FlexibleTestingTask : Task
                     {
                         attributedInstructionClassCount++;
                         GenerateForFlexibleTesting(
+                            solution,
                             testCompilation,
                             legacyCompilation,
                             semanticModel,
@@ -239,7 +242,19 @@ public class FlexibleTestingTask : Task
         }
     }
 
+    private sealed record FlexibleTestingInstructions(
+        INamedTypeSymbol TargetType,
+        string OldClassName,
+        string NewClassName,
+        IReadOnlyList<IMethodSymbol> MethodsToMakePublic,
+        IReadOnlyList<MockableSpec> Mockables,
+        string DependenciesInterfaceName,
+        string DependenciesFieldName,
+        string DependenciesParameterName
+    );
+
     private void GenerateForFlexibleTesting(
+        Solution solution,
         Compilation testCompilation,
         Compilation? legacyCompilation,
         SemanticModel semanticModelB,
@@ -342,26 +357,26 @@ public class FlexibleTestingTask : Task
         var oldName = targetClassNode.Identifier.Text;
         var newName = $"{oldName}_G";
 
-        var targetRoot = targetClassNode.SyntaxTree.GetRoot();
-        var legacySemanticModel = legacyCompilation.GetSemanticModel(targetClassNode.SyntaxTree);
-
-        var rewriter = new ClassRenamer(legacySemanticModel, oldName, newName, methodsToMakePublicInLegacy);
-        var newRoot = rewriter.Visit(targetRoot);
-
-        // Apply Mockable() rewrite(s) + auto dependency injection (IAutoDependencies) if needed
-        if (mockablesFromTest.Count > 0 && newRoot is not null)
+        var document = solution.GetDocument(targetClassNode.SyntaxTree);
+        if (document == null)
         {
-            var depRewriter = new MockableAndDependenciesRewriter(
-                targetClassName: newName,
-                targetTypeFullName: targetTypeInLegacy.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-                mockables: mockablesFromTest,
-                dependenciesInterfaceName: $"IAuto{oldName}Dependencies",
-                dependenciesFieldName: "_dependencies",
-                dependenciesParameterName: "dependencies"
-            );
-
-            newRoot = depRewriter.Visit(newRoot);
+            Log.LogError($"[{TestProjectDisplay}] Could not find Document for target class '{targetTypeInLegacy.ToDisplayString()}' in the solution.");
+            return;
         }
+
+        var instructions = new FlexibleTestingInstructions(
+            TargetType: targetTypeInLegacy,
+            OldClassName: oldName,
+            NewClassName: newName,
+            MethodsToMakePublic: methodsToMakePublicInLegacy,
+            Mockables: mockablesFromTest,
+            DependenciesInterfaceName: $"IAuto{oldName}Dependencies",
+            DependenciesFieldName: "_dependencies",
+            DependenciesParameterName: "dependencies"
+        );
+
+        var rewrittenDocument = ApplyRewritesAsync(document, targetClassNode, instructions).GetAwaiter().GetResult();
+        var newRoot = rewrittenDocument.GetSyntaxRootAsync().GetAwaiter().GetResult();
 
         var normalized = newRoot!
             .NormalizeWhitespace(elasticTrivia: true)
@@ -383,6 +398,219 @@ public class FlexibleTestingTask : Task
         );
     }
 
+    private async Task<Document> ApplyRewritesAsync(
+        Document document,
+        ClassDeclarationSyntax classNode,
+        FlexibleTestingInstructions instructions
+    )
+    {
+        var editor = await DocumentEditor.CreateAsync(document);
+        var generator = editor.Generator;
+        var semanticModel = await document.GetSemanticModelAsync();
+        var root = await document.GetSyntaxRootAsync();
+
+        // 1. Rename class and constructors
+        editor.SetDeclarationName(classNode, instructions.NewClassName);
+        var ctors = classNode.Members.OfType<ConstructorDeclarationSyntax>().ToList();
+        foreach (var ctor in ctors)
+        {
+            editor.SetDeclarationName(ctor, instructions.NewClassName);
+        }
+
+        // 2. Publicize members
+        foreach (var methodSymbol in instructions.MethodsToMakePublic)
+        {
+            var methodNode = classNode.Members.OfType<MethodDeclarationSyntax>()
+                .FirstOrDefault(m => SymbolsMatch(semanticModel.GetDeclaredSymbol(m), methodSymbol));
+
+            if (methodNode != null)
+            {
+                editor.SetAccessibility(methodNode, Accessibility.Public);
+            }
+        }
+
+        // 3. Dependency Injection: Field
+        var fieldDecl = generator.FieldDeclaration(
+            instructions.DependenciesFieldName,
+            generator.IdentifierName(instructions.DependenciesInterfaceName),
+            Accessibility.Private,
+            DeclarationModifiers.ReadOnly
+        );
+        editor.InsertBefore(classNode.Members.First(), fieldDecl);
+
+        // 4. Dependency Injection: Constructors
+        foreach (var ctor in ctors)
+        {
+            var paramName = instructions.DependenciesParameterName;
+            if (ctor.ParameterList.Parameters.Any(p => p.Identifier.Text == paramName))
+                paramName += "2";
+
+            var newParam = generator.ParameterDeclaration(
+                paramName,
+                generator.IdentifierName(instructions.DependenciesInterfaceName)
+            );
+
+            editor.AddParameter(ctor, newParam);
+
+            var assignment = generator.AssignmentStatement(
+                generator.IdentifierName(instructions.DependenciesFieldName),
+                generator.IdentifierName(paramName)
+            );
+
+            if (ctor.Body != null)
+            {
+                if (ctor.Body.Statements.Any())
+                    editor.InsertBefore(ctor.Body.Statements.First(), assignment);
+                else
+                    editor.ReplaceNode(ctor.Body, ctor.Body.AddStatements((StatementSyntax)assignment));
+            }
+        }
+
+        // 5. Mockable replacements
+        var nodesToReplace = classNode.DescendantNodes()
+            .Where(n => n is InvocationExpressionSyntax or MemberAccessExpressionSyntax)
+            .ToList();
+
+        bool needsCallerMemberName = false;
+
+        foreach (var node in nodesToReplace)
+        {
+            var spec = GetMockableSpecForNode(node, semanticModel, instructions.Mockables);
+            if (spec != null)
+            {
+                if (spec.Parameters.Any(p => p.HasCallerMemberNameAttribute))
+                    needsCallerMemberName = true;
+
+                SyntaxNode replacement;
+                if (spec.Kind == MockableKind.Method)
+                {
+                    var args = node is InvocationExpressionSyntax inv 
+                        ? inv.ArgumentList.Arguments.Select(a => a.Expression) 
+                        : Enumerable.Empty<SyntaxNode>();
+
+                    replacement = generator.InvocationExpression(
+                        generator.MemberAccessExpression(
+                            generator.IdentifierName(instructions.DependenciesFieldName),
+                            spec.DependencyMemberName
+                        ),
+                        args
+                    );
+                }
+                else
+                {
+                    replacement = generator.InvocationExpression(
+                        generator.MemberAccessExpression(
+                            generator.IdentifierName(instructions.DependenciesFieldName),
+                            spec.DependencyMemberName
+                        )
+                    );
+                }
+                editor.ReplaceNode(node, replacement.WithTriviaFrom(node));
+            }
+        }
+
+        // 6. Dependency Injection: Interface
+        var interfaceDecl = BuildDependenciesInterface(generator, instructions);
+        editor.InsertAfter(classNode, interfaceDecl);
+
+        // 7. Usings
+        if (needsCallerMemberName && root is CompilationUnitSyntax cu)
+        {
+            if (!cu.Usings.Any(u => u.Name?.ToString() == "System.Runtime.CompilerServices"))
+            {
+                var newUsing = generator.NamespaceImportDeclaration("System.Runtime.CompilerServices");
+                editor.AddImport(cu, newUsing);
+            }
+        }
+
+        return editor.GetChangedDocument();
+    }
+
+    private static bool SymbolsMatch(ISymbol? a, ISymbol? b)
+    {
+        if (a == null || b == null) return false;
+        if (a.Name != b.Name) return false;
+        
+        if (a is IMethodSymbol ma && b is IMethodSymbol mb)
+        {
+            if (ma.Parameters.Length != mb.Parameters.Length) return false;
+            for (int i = 0; i < ma.Parameters.Length; i++)
+            {
+                if (ma.Parameters[i].Type.ToDisplayString() != mb.Parameters[i].Type.ToDisplayString())
+                    return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private static MockableSpec? GetMockableSpecForNode(SyntaxNode node, SemanticModel semanticModel, IReadOnlyList<MockableSpec> mockables)
+    {
+        var symbol = semanticModel.GetSymbolInfo(node).Symbol;
+        if (symbol == null && node is MemberAccessExpressionSyntax mae)
+            symbol = semanticModel.GetSymbolInfo(mae.Name).Symbol;
+        if (symbol == null && node is InvocationExpressionSyntax inv)
+            symbol = semanticModel.GetSymbolInfo(inv.Expression).Symbol;
+
+        if (symbol == null) return null;
+
+        var fullQualifiedName = symbol.ContainingType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+        return mockables.FirstOrDefault(m => 
+            m.MemberName == symbol.Name && 
+            m.ContainingTypeFullName == fullQualifiedName);
+    }
+
+    private static SyntaxNode BuildDependenciesInterface(SyntaxGenerator generator, FlexibleTestingInstructions instructions)
+    {
+        var members = new List<SyntaxNode>();
+
+        foreach (var m in instructions.Mockables)
+        {
+            if (m.Kind == MockableKind.Method)
+            {
+                var parameters = m.Parameters.Select(p => {
+                    var param = generator.ParameterDeclaration(p.Name, generator.IdentifierName(p.TypeDisplay));
+                    if (p.HasCallerMemberNameAttribute)
+                    {
+                        param = generator.AddAttributes(param, generator.Attribute("CallerMemberName"));
+                    }
+                    if (p.HasExplicitDefaultValue)
+                    {
+                        param = generator.WithDefaultValue(param, generator.LiteralExpression(p.ExplicitDefaultValue));
+                    }
+                    return param;
+                });
+
+                var method = generator.MethodDeclaration(
+                    m.DependencyMemberName,
+                    parameters: parameters,
+                    returnType: generator.IdentifierName(m.ReturnTypeDisplay ?? "void"),
+                    accessibility: Accessibility.Public
+                );
+                members.Add(method);
+            }
+            else
+            {
+                var prop = generator.PropertyDeclaration(
+                    m.DependencyMemberName,
+                    generator.IdentifierName(m.DelegateTypeDisplay),
+                    accessibility: Accessibility.Public,
+                    getAccessorStatements: null
+                );
+                members.Add(prop);
+            }
+        }
+
+        var iface = generator.InterfaceDeclaration(
+            instructions.DependenciesInterfaceName,
+            accessibility: Accessibility.Public,
+            members: members
+        );
+
+        return generator.WithLeadingTrivia(iface, generator.TriviaList(generator.Comment("/// <summary>Mock this using NSubstitute</summary>")));
+    }
+
     private static List<IMethodSymbol> MapMethodsToLegacy(INamedTypeSymbol legacyType, List<IMethodSymbol> methodsFromTest)
     {
         var legacyMethods = legacyType.GetMembers().OfType<IMethodSymbol>().ToList();
@@ -390,31 +618,12 @@ public class FlexibleTestingTask : Task
 
         foreach (var mb in methodsFromTest)
         {
-            var match = legacyMethods.FirstOrDefault(ml => MethodsMatch(ml, mb));
+            var match = legacyMethods.FirstOrDefault(ml => SymbolsMatch(ml, mb));
             if (match != null)
                 result.Add(match);
         }
 
         return result;
-
-        static bool MethodsMatch(IMethodSymbol legacyMethod, IMethodSymbol methodFromTest)
-        {
-            if (!string.Equals(legacyMethod.Name, methodFromTest.Name, StringComparison.Ordinal))
-                return false;
-
-            if (legacyMethod.Parameters.Length != methodFromTest.Parameters.Length)
-                return false;
-
-            for (int i = 0; i < legacyMethod.Parameters.Length; i++)
-            {
-                var a = legacyMethod.Parameters[i].Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                var b = methodFromTest.Parameters[i].Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                if (!string.Equals(a, b, StringComparison.Ordinal))
-                    return false;
-            }
-
-            return true;
-        }
     }
 
     private static Solution AddDocuments(
@@ -436,7 +645,6 @@ public class FlexibleTestingTask : Task
                 var full = Path.GetFullPath(filePath);
                 var root = Path.GetFullPath(expectedRootDirectoryForWarning);
 
-                // Not an error, but a very useful signal if you suspect "wrong project files are being compiled".
                 if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 {
                     log.LogMessage(
@@ -481,7 +689,6 @@ public class FlexibleTestingTask : Task
 
             if (!File.Exists(filePath))
             {
-                // Previously you silently skipped these. Logging helps explain missing attributes/types.
                 Log.LogMessage(MessageImportance.Low, $"[{projectDisplayForLogging}] Reference path does not exist (skipped): {filePath}");
                 continue;
             }
@@ -505,7 +712,6 @@ public class FlexibleTestingTask : Task
 
         if (!string.IsNullOrWhiteSpace(defineConstants))
         {
-            // MSBuild DefineConstants usually looks like: "DEBUG;TRACE;SOMETHING"
             symbols.AddRange(
                 defineConstants
                     .Split(new[] { ';', ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
@@ -517,17 +723,13 @@ public class FlexibleTestingTask : Task
         return new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: symbols);
     }
 
-    // Namespace.Outer+Inner`1
     private static string GetTypeMetadataName(INamedTypeSymbol symbol)
     {
         symbol = symbol.OriginalDefinition;
-
         var ns = symbol.ContainingNamespace is { IsGlobalNamespace: false } ? symbol.ContainingNamespace.ToDisplayString() : null;
-
         var typeParts = new Stack<string>();
         for (INamedTypeSymbol? t = symbol; t != null; t = t.ContainingType)
             typeParts.Push(t.MetadataName);
-
         var typeName = string.Join("+", typeParts);
         return string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
     }
@@ -537,28 +739,20 @@ public class FlexibleTestingTask : Task
         var p = item.GetMetadata("FullPath");
         if (!string.IsNullOrWhiteSpace(p))
             return p;
-
         return item.ItemSpec;
     }
 
     private static string? TryGetCommonRootDirectory(IEnumerable<string> filePaths)
     {
         var paths = filePaths.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => Path.GetFullPath(p)).ToList();
-
-        if (paths.Count == 0)
-            return null;
-
+        if (paths.Count == 0) return null;
         var dirParts = paths
             .Select(p => (Path.GetDirectoryName(p) ?? "").Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
             .Where(parts => parts.Length > 0)
             .ToList();
-
-        if (dirParts.Count == 0)
-            return null;
-
+        if (dirParts.Count == 0) return null;
         int minLen = dirParts.Min(a => a.Length);
         int commonLen = 0;
-
         for (int i = 0; i < minLen; i++)
         {
             var candidate = dirParts[0][i];
@@ -567,30 +761,17 @@ public class FlexibleTestingTask : Task
             else
                 break;
         }
-
-        if (commonLen == 0)
-            return null;
-
+        if (commonLen == 0) return null;
         var commonParts = dirParts[0].Take(commonLen);
         var root = string.Join(Path.DirectorySeparatorChar.ToString(), commonParts);
-
-        // Ensure it's an absolute-ish root if possible
         if (Path.IsPathRooted(paths[0]))
         {
-            // Rebuild from drive root + parts, easiest is just return DirectoryName of a file truncated:
             var firstDir = Path.GetDirectoryName(paths[0]) ?? "";
             var rootFull = firstDir;
-
-            // Trim until it matches the computed root suffix
-            // (simple approach: walk up until it ends with root string)
             while (!string.IsNullOrEmpty(rootFull) && !rootFull.EndsWith(root, StringComparison.OrdinalIgnoreCase))
-            {
                 rootFull = Path.GetDirectoryName(rootFull) ?? "";
-            }
-
             return string.IsNullOrEmpty(rootFull) ? null : rootFull;
         }
-
         return root;
     }
 
@@ -600,18 +781,13 @@ public class FlexibleTestingTask : Task
         InvocationExpressionSyntax invocation
     )
     {
-        if (invocation.ArgumentList.Arguments.Count == 0)
-            return;
-
+        if (invocation.ArgumentList.Arguments.Count == 0) return;
         var argument = invocation.ArgumentList.Arguments[0].Expression;
-
         if (argument is LambdaExpressionSyntax lambda)
         {
             SyntaxNode nodeToInspect = lambda.Body is InvocationExpressionSyntax invocationBody ? invocationBody.Expression : lambda.Body;
-
             var methodSymbol = semanticModel.GetSymbolInfo(nodeToInspect).Symbol as IMethodSymbol;
-            if (methodSymbol != null)
-                methodsToMakePublic.Add(methodSymbol);
+            if (methodSymbol != null) methodsToMakePublic.Add(methodSymbol);
         }
     }
 
@@ -621,65 +797,36 @@ public class FlexibleTestingTask : Task
         InvocationExpressionSyntax invocation
     )
     {
-        if (invocation.ArgumentList.Arguments.Count == 0)
-            return;
-
+        if (invocation.ArgumentList.Arguments.Count == 0) return;
         var argument = invocation.ArgumentList.Arguments[0].Expression;
-        if (argument is not LambdaExpressionSyntax lambda)
-            return;
-
-        // Only support parameterless lambdas for now: () => Some.StaticMember or () => Some.StaticMethod(...)
-        if (lambda switch
-        {
-            ParenthesizedLambdaExpressionSyntax pl => pl.ParameterList.Parameters.Count,
-            SimpleLambdaExpressionSyntax => 1,
-            _ => 0
-        } != 0)
+        if (argument is not LambdaExpressionSyntax lambda) return;
+        if (lambda switch { ParenthesizedLambdaExpressionSyntax pl => pl.ParameterList.Parameters.Count, SimpleLambdaExpressionSyntax => 1, _ => 0 } != 0)
         {
             Log.LogError($"[{TestProjectDisplay}] Overwrites.Mockable only supports parameterless lambdas: Overwrites.Mockable(() => ...)");
             return;
         }
-
         ExpressionSyntax? bodyExpr = lambda.Body as ExpressionSyntax;
         if (bodyExpr == null && lambda.Body is BlockSyntax block)
-        {
-            // Support: () => { return DateTime.Now; }
             bodyExpr = block.Statements.OfType<ReturnStatementSyntax>().Select(r => r.Expression).FirstOrDefault(e => e != null) as ExpressionSyntax;
-        }
-
         if (bodyExpr == null)
         {
             Log.LogError($"[{TestProjectDisplay}] Overwrites.Mockable lambda body must be an expression (or a block with a return expression).");
             return;
         }
-
-        // Find the symbol referenced by the expression
         var symbol = semanticModel.GetSymbolInfo(bodyExpr).Symbol;
-
-        // If body is member-access, sometimes symbol info binds to the "name" node; try that too.
-        if (symbol == null && bodyExpr is MemberAccessExpressionSyntax mae)
-            symbol = semanticModel.GetSymbolInfo(mae.Name).Symbol;
-
-        // If body is invocation, bind the invoked expression too.
-        if (symbol == null && bodyExpr is InvocationExpressionSyntax inv)
-            symbol = semanticModel.GetSymbolInfo(inv.Expression).Symbol;
-
+        if (symbol == null && bodyExpr is MemberAccessExpressionSyntax mae) symbol = semanticModel.GetSymbolInfo(mae.Name).Symbol;
+        if (symbol == null && bodyExpr is InvocationExpressionSyntax inv) symbol = semanticModel.GetSymbolInfo(inv.Expression).Symbol;
         if (symbol is not (IPropertySymbol or IFieldSymbol or IMethodSymbol))
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Overwrites.Mockable could not resolve a property/field/method symbol from: {bodyExpr.WithoutTrivia().ToString()}"
-            );
+            Log.LogError($"[{TestProjectDisplay}] Overwrites.Mockable could not resolve a property/field/method symbol from: {bodyExpr.WithoutTrivia().ToString()}");
             return;
         }
-
         var spec = MockableSpec.TryCreate(symbol);
         if (spec == null)
         {
             Log.LogError($"[{TestProjectDisplay}] Overwrites.Mockable does not support the provided expression: {bodyExpr.WithoutTrivia()}");
             return;
         }
-
-        // Ensure unique dependency member names
         var baseName = spec.DependencyMemberName;
         var finalName = baseName;
         int i = 1;
@@ -688,422 +835,10 @@ public class FlexibleTestingTask : Task
             finalName = $"{baseName}_{i}";
             i++;
         }
-
         mockables.Add(spec with { DependencyMemberName = finalName });
     }
 
-    private sealed class MockableAndDependenciesRewriter : CSharpSyntaxRewriter
-    {
-        private readonly string _targetClassName;
-        private readonly string _targetTypeFullName;
-        private readonly IReadOnlyList<MockableSpec> _mockables;
-        private readonly string _dependenciesInterfaceName;
-        private readonly string _dependenciesFieldName;
-        private readonly string _dependenciesParameterName;
-
-        private bool _insideTargetClass;
-        private bool _addedInterface;
-        private bool _needsCallerMemberNameUsing;
-
-        public MockableAndDependenciesRewriter(
-            string targetClassName,
-            string targetTypeFullName,
-            IReadOnlyList<MockableSpec> mockables,
-            string dependenciesInterfaceName,
-            string dependenciesFieldName,
-            string dependenciesParameterName)
-        {
-            _targetClassName = targetClassName;
-            _targetTypeFullName = targetTypeFullName;
-            _mockables = mockables;
-            _dependenciesInterfaceName = dependenciesInterfaceName;
-            _dependenciesFieldName = dependenciesFieldName;
-            _dependenciesParameterName = dependenciesParameterName;
-        }
-
-        public override SyntaxNode? VisitCompilationUnit(CompilationUnitSyntax node)
-        {
-            var updated = (CompilationUnitSyntax)base.VisitCompilationUnit(node)!;
-
-            if (_needsCallerMemberNameUsing)
-            {
-                var already = updated.Usings.Any(u => u.Name?.ToString() == "System.Runtime.CompilerServices");
-                if (!already)
-                {
-                    var u = SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System.Runtime.CompilerServices"))
-                        .WithTrailingTrivia(SyntaxFactory.ElasticCarriageReturnLineFeed);
-                    updated = updated.AddUsings(u);
-                }
-            }
-
-            if (!_addedInterface)
-            {
-                var hasTargetClassAtRoot = updated.Members.OfType<ClassDeclarationSyntax>().Any(c => c.Identifier.Text == _targetClassName);
-                if (hasTargetClassAtRoot)
-                {
-                    if (!updated.Members.OfType<InterfaceDeclarationSyntax>().Any(i => i.Identifier.Text == _dependenciesInterfaceName))
-                    {
-                        updated = updated.AddMembers(BuildDependenciesInterface());
-                    }
-                    _addedInterface = true;
-                }
-            }
-
-            return updated;
-        }
-
-        public override SyntaxNode? VisitFileScopedNamespaceDeclaration(FileScopedNamespaceDeclarationSyntax node)
-        {
-            var updated = (FileScopedNamespaceDeclarationSyntax)base.VisitFileScopedNamespaceDeclaration(node)!;
-
-            if (!_addedInterface && ContainsTargetClass(updated.Members))
-            {
-                if (!updated.Members.OfType<InterfaceDeclarationSyntax>().Any(i => i.Identifier.Text == _dependenciesInterfaceName))
-                    updated = updated.AddMembers(BuildDependenciesInterface());
-                _addedInterface = true;
-            }
-
-            return updated;
-        }
-
-        public override SyntaxNode? VisitNamespaceDeclaration(NamespaceDeclarationSyntax node)
-        {
-            var updated = (NamespaceDeclarationSyntax)base.VisitNamespaceDeclaration(node)!;
-
-            if (!_addedInterface && ContainsTargetClass(updated.Members))
-            {
-                if (!updated.Members.OfType<InterfaceDeclarationSyntax>().Any(i => i.Identifier.Text == _dependenciesInterfaceName))
-                    updated = updated.AddMembers(BuildDependenciesInterface());
-                _addedInterface = true;
-            }
-
-            return updated;
-        }
-
-        public override SyntaxNode? VisitClassDeclaration(ClassDeclarationSyntax node)
-        {
-            if (node.Identifier.Text != _targetClassName)
-                return base.VisitClassDeclaration(node);
-
-            var prev = _insideTargetClass;
-            _insideTargetClass = true;
-
-            var visited = (ClassDeclarationSyntax)base.VisitClassDeclaration(node)!;
-
-            _insideTargetClass = prev;
-
-            if (!visited.Members.OfType<FieldDeclarationSyntax>().Any(f =>
-                    f.Declaration.Variables.Any(v => v.Identifier.Text == _dependenciesFieldName)))
-            {
-                var field = SyntaxFactory.FieldDeclaration(
-                        SyntaxFactory.VariableDeclaration(
-                            SyntaxFactory.IdentifierName(_dependenciesInterfaceName),
-                            SyntaxFactory.SingletonSeparatedList(
-                                SyntaxFactory.VariableDeclarator(SyntaxFactory.Identifier(_dependenciesFieldName))
-                            )
-                        )
-                    )
-                    .AddModifiers(SyntaxFactory.Token(SyntaxKind.PrivateKeyword), SyntaxFactory.Token(SyntaxKind.ReadOnlyKeyword))
-                    .WithTrailingTrivia(
-                        SyntaxFactory.ElasticCarriageReturnLineFeed,
-                        SyntaxFactory.ElasticCarriageReturnLineFeed
-                    );
-
-                visited = visited.WithMembers(visited.Members.Insert(0, field));
-            }
-
-            var newMembers = new List<MemberDeclarationSyntax>(visited.Members.Count);
-            foreach (var m in visited.Members)
-            {
-                if (m is ConstructorDeclarationSyntax ctor)
-                    newMembers.Add(InjectDependenciesIntoConstructor(ctor));
-                else
-                    newMembers.Add(m);
-            }
-
-            visited = visited.WithMembers(SyntaxFactory.List(newMembers));
-            return visited;
-
-            bool ContainsTargetClass(SyntaxList<MemberDeclarationSyntax> members)
-                => members.OfType<ClassDeclarationSyntax>().Any(c => c.Identifier.Text == _targetClassName);
-        }
-
-        public override SyntaxNode? VisitInvocationExpression(InvocationExpressionSyntax node)
-        {
-            if (!_insideTargetClass) return base.VisitInvocationExpression(node);
-
-            MockableSpec? spec = null;
-            if (node.Expression is IdentifierNameSyntax id)
-            {
-                spec = _mockables.FirstOrDefault(s =>
-                    s.Kind == MockableKind.Method
-                    && s.IsInstanceMember
-                    && s.MemberName == id.Identifier.Text);
-            }
-            else if (node.Expression is MemberAccessExpressionSyntax mae)
-            {
-                var memberName = mae.Name.Identifier.Text;
-                if (mae.Expression is ThisExpressionSyntax)
-                {
-                    spec = _mockables.FirstOrDefault(s =>
-                        s.Kind == MockableKind.Method
-                        && s.IsInstanceMember
-                        && s.MemberName == memberName);
-                }
-                else
-                {
-                    var containingTypeSimple = GetLastIdentifier(mae.Expression);
-                    spec = _mockables.FirstOrDefault(s =>
-                        s.Kind == MockableKind.Method
-                        && s.MemberName == memberName
-                        && s.ContainingTypeSimpleName == containingTypeSimple);
-                }
-            }
-
-            if (spec != null)
-            {
-                if (spec.Parameters.Any(p => p.HasCallerMemberNameAttribute))
-                    _needsCallerMemberNameUsing = true;
-
-                var newExpr = SyntaxFactory.MemberAccessExpression(
-                    SyntaxKind.SimpleMemberAccessExpression,
-                    SyntaxFactory.IdentifierName(_dependenciesFieldName),
-                    SyntaxFactory.IdentifierName(spec.DependencyMemberName)
-                );
-
-                return node.WithExpression(newExpr).WithTriviaFrom(node);
-            }
-
-            return base.VisitInvocationExpression(node);
-        }
-
-        public override SyntaxNode? VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
-        {
-            if (_insideTargetClass)
-            {
-                var containingTypeSimple = GetLastIdentifier(node.Expression);
-                var memberName = node.Name.Identifier.Text;
-
-                var spec = _mockables.FirstOrDefault(s =>
-                    (s.Kind == MockableKind.Property || s.Kind == MockableKind.Field)
-                    && s.MemberName == memberName
-                    && s.ContainingTypeSimpleName == containingTypeSimple);
-
-                if (spec != null)
-                {
-                    var original = node.WithoutTrivia().ToString();
-
-                    var invocation = SyntaxFactory.InvocationExpression(
-                        SyntaxFactory.MemberAccessExpression(
-                            SyntaxKind.SimpleMemberAccessExpression,
-                            SyntaxFactory.IdentifierName(_dependenciesFieldName),
-                            SyntaxFactory.IdentifierName(spec.DependencyMemberName)
-                        ),
-                        SyntaxFactory.ArgumentList()
-                    );
-
-                    var comment = SyntaxFactory.Comment($"/* Original: {original} */");
-
-                    return invocation
-                        .WithTrailingTrivia(
-                            SyntaxFactory.TriviaList(
-                                SyntaxFactory.Space,
-                                comment
-                            )
-                        )
-                        .WithLeadingTrivia(node.GetLeadingTrivia());
-                }
-            }
-
-            return base.VisitMemberAccessExpression(node);
-        }
-
-        private ConstructorDeclarationSyntax InjectDependenciesIntoConstructor(ConstructorDeclarationSyntax ctor)
-        {
-            var hasParamAlready = ctor.ParameterList.Parameters.Any(p =>
-                p.Type?.ToString() == _dependenciesInterfaceName);
-
-            if (!hasParamAlready)
-            {
-                var paramName = ctor.ParameterList.Parameters.Any(p => p.Identifier.Text == _dependenciesParameterName)
-                    ? _dependenciesParameterName + "2"
-                    : _dependenciesParameterName;
-
-                var newParam = SyntaxFactory.Parameter(SyntaxFactory.Identifier(paramName))
-                    .WithType(SyntaxFactory.IdentifierName(_dependenciesInterfaceName)).WithTrailingTrivia(SyntaxFactory.Space);
-
-                ctor = ctor.WithParameterList(
-                    ctor.ParameterList.AddParameters(newParam)
-                );
-
-                if (ctor.Body != null)
-                {
-                    var assignment = SyntaxFactory.ExpressionStatement(
-                        SyntaxFactory.AssignmentExpression(
-                            SyntaxKind.SimpleAssignmentExpression,
-                            SyntaxFactory.IdentifierName(_dependenciesFieldName),
-                            SyntaxFactory.IdentifierName(paramName)
-                        )
-                    );
-
-                    ctor = ctor.WithBody(ctor.Body.WithStatements(ctor.Body.Statements.Insert(0, assignment)));
-                }
-            }
-
-            return ctor;
-        }
-
-        private InterfaceDeclarationSyntax BuildDependenciesInterface()
-        {
-            var members = new List<MemberDeclarationSyntax>();
-
-            foreach (var m in _mockables)
-            {
-                if (m.Kind == MockableKind.Method)
-                {
-                    if (m.Parameters.Any(p => p.HasCallerMemberNameAttribute))
-                        _needsCallerMemberNameUsing = true;
-
-                    var parameters = m.Parameters.Select(BuildParameterSyntax);
-                    var method = SyntaxFactory.MethodDeclaration(
-                            SyntaxFactory.ParseTypeName(m.ReturnTypeDisplay ?? "void"),
-                            SyntaxFactory.Identifier(m.DependencyMemberName)
-                        )
-                        .WithParameterList(SyntaxFactory.ParameterList(SyntaxFactory.SeparatedList(parameters)))
-                        .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken));
-
-                    members.Add(method);
-                }
-                else
-                {
-                    var prop = SyntaxFactory.PropertyDeclaration(
-                            SyntaxFactory.ParseTypeName(m.DelegateTypeDisplay),
-                            SyntaxFactory.Identifier(m.DependencyMemberName)
-                        )
-                        .WithAccessorList(
-                            SyntaxFactory.AccessorList(
-                                SyntaxFactory.SingletonList(
-                                    SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration)
-                                        .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken))
-                                )
-                            )
-                        );
-
-                    members.Add(prop);
-                }
-            }
-
-            var iface = SyntaxFactory.InterfaceDeclaration(_dependenciesInterfaceName)
-                .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword))
-                .WithLeadingTrivia(
-                    SyntaxFactory.TriviaList(
-                        SyntaxFactory.Trivia(
-                            SyntaxFactory.DocumentationCommentTrivia(SyntaxKind.SingleLineDocumentationCommentTrivia,
-                                SyntaxFactory.List(new XmlNodeSyntax[]
-                                {
-                                    SyntaxFactory.XmlText("/// "),
-                                    SyntaxFactory.XmlElement(
-                                        SyntaxFactory.XmlElementStartTag(SyntaxFactory.XmlName("summary")),
-                                        SyntaxFactory.SingletonList<XmlNodeSyntax>(
-                                            SyntaxFactory.XmlText("Mock this using NSubstitute")
-                                        ),
-                                        SyntaxFactory.XmlElementEndTag(SyntaxFactory.XmlName("summary"))
-                                    ),
-                                    SyntaxFactory.XmlText(Environment.NewLine)
-                                })
-                            )
-                        )
-                    )
-                )
-                .WithMembers(SyntaxFactory.List(members))
-                .WithTrailingTrivia(SyntaxFactory.ElasticCarriageReturnLineFeed);
-
-            return iface;
-        }
-
-        private static ParameterSyntax BuildParameterSyntax(MockableParameter p)
-        {
-            var param = SyntaxFactory.Parameter(SyntaxFactory.Identifier(p.Name))
-                .WithType(SyntaxFactory.ParseTypeName(p.TypeDisplay));
-
-            if (p.HasCallerMemberNameAttribute)
-            {
-                var attr = SyntaxFactory.Attribute(SyntaxFactory.IdentifierName("CallerMemberName"));
-                param = param.WithAttributeLists(
-                    SyntaxFactory.SingletonList(
-                        SyntaxFactory.AttributeList(SyntaxFactory.SingletonSeparatedList(attr))
-                    )
-                );
-            }
-
-            if (p.HasExplicitDefaultValue)
-            {
-                if (p.ExplicitDefaultValue is null)
-                {
-                    ExpressionSyntax nullExpr;
-                    if (p.NullableAnnotation == NullableAnnotation.Annotated)
-                        nullExpr = SyntaxFactory.LiteralExpression(SyntaxKind.NullLiteralExpression);
-                    else
-                        nullExpr = SyntaxFactory.PostfixUnaryExpression(
-                            SyntaxKind.SuppressNullableWarningExpression,
-                            SyntaxFactory.LiteralExpression(SyntaxKind.NullLiteralExpression)
-                        );
-
-                    param = param.WithDefault(SyntaxFactory.EqualsValueClause(nullExpr));
-                }
-                else if (p.ExplicitDefaultValue is string s)
-                {
-                    param = param.WithDefault(
-                        SyntaxFactory.EqualsValueClause(SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(s)))
-                    );
-                }
-                else if (p.ExplicitDefaultValue is bool b)
-                {
-                    param = param.WithDefault(
-                        SyntaxFactory.EqualsValueClause(
-                            b
-                                ? SyntaxFactory.LiteralExpression(SyntaxKind.TrueLiteralExpression)
-                                : SyntaxFactory.LiteralExpression(SyntaxKind.FalseLiteralExpression)
-                        )
-                    );
-                }
-                else if (p.ExplicitDefaultValue is int i)
-                {
-                    param = param.WithDefault(
-                        SyntaxFactory.EqualsValueClause(SyntaxFactory.LiteralExpression(SyntaxKind.NumericLiteralExpression, SyntaxFactory.Literal(i)))
-                    );
-                }
-                else
-                {
-                    param = param.WithDefault(SyntaxFactory.EqualsValueClause(SyntaxFactory.IdentifierName("default")));
-                }
-            }
-
-            return param;
-        }
-
-        private static bool ContainsTargetClass(SyntaxList<MemberDeclarationSyntax> members)
-            => members.OfType<ClassDeclarationSyntax>().Any(c => c.Identifier.Text != null);
-
-        private static string? GetLastIdentifier(ExpressionSyntax expr)
-        {
-            return expr switch
-            {
-                IdentifierNameSyntax id => id.Identifier.Text,
-                MemberAccessExpressionSyntax mae => mae.Name.Identifier.Text,
-                QualifiedNameSyntax qn => qn.Right.Identifier.Text,
-                AliasQualifiedNameSyntax aqn => aqn.Name.Identifier.Text,
-                _ => expr.ToString().Split('.').LastOrDefault()
-            };
-        }
-    }
-
-    private enum MockableKind
-    {
-        Property,
-        Field,
-        Method
-    }
+    private enum MockableKind { Property, Field, Method }
 
     private sealed record MockableParameter(
         string Name,
@@ -1129,13 +864,10 @@ public class FlexibleTestingTask : Task
         public static MockableSpec? TryCreate(ISymbol symbol)
         {
             var containingType = symbol.ContainingType;
-            if (containingType == null)
-                return null;
-
+            if (containingType == null) return null;
             var containingTypeSimple = containingType.Name;
             var containingTypeFull = containingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
             var isInstance = !symbol.IsStatic;
-
             switch (symbol)
             {
                 case IPropertySymbol p:
@@ -1150,7 +882,6 @@ public class FlexibleTestingTask : Task
                         ReturnTypeDisplay: p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                         IsInstanceMember: isInstance
                     );
-
                 case IFieldSymbol f:
                     return new MockableSpec(
                         Kind: MockableKind.Field,
@@ -1163,24 +894,17 @@ public class FlexibleTestingTask : Task
                         ReturnTypeDisplay: f.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                         IsInstanceMember: isInstance
                     );
-
                 case IMethodSymbol m:
-                    if (m.MethodKind != MethodKind.Ordinary)
-                        return null;
-
+                    if (m.MethodKind != MethodKind.Ordinary) return null;
                     var paramTypes = m.Parameters.Select(pp => pp.Type).ToArray();
                     var parameters = m.Parameters.Select(p => new MockableParameter(
                         Name: string.IsNullOrWhiteSpace(p.Name) ? "param" : p.Name,
-                        TypeDisplay: p.Type.ToDisplayString(
-                            SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier)
-                        ),
+                        TypeDisplay: p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier)),
                         NullableAnnotation: p.Type.NullableAnnotation,
                         HasExplicitDefaultValue: p.HasExplicitDefaultValue,
                         ExplicitDefaultValue: p.HasExplicitDefaultValue ? p.ExplicitDefaultValue : null,
-                        HasCallerMemberNameAttribute: p.GetAttributes().Any(a =>
-                            a.AttributeClass?.ToDisplayString() == "System.Runtime.CompilerServices.CallerMemberNameAttribute")
+                        HasCallerMemberNameAttribute: p.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == "System.Runtime.CompilerServices.CallerMemberNameAttribute")
                     )).ToList();
-
                     return new MockableSpec(
                         Kind: MockableKind.Method,
                         ContainingTypeSimpleName: containingTypeSimple,
@@ -1192,7 +916,6 @@ public class FlexibleTestingTask : Task
                         ReturnTypeDisplay: m.ReturnType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                         IsInstanceMember: isInstance
                     );
-
                 default:
                     return null;
             }
@@ -1200,24 +923,16 @@ public class FlexibleTestingTask : Task
 
         private static string BuildDelegateTypeDisplay(IReadOnlyList<ITypeSymbol> parameterTypes, ITypeSymbol returnType)
         {
-            static string TypeDisplay(ITypeSymbol t) =>
-                t.ToDisplayString(
-                    SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier)
-                );
-
+            static string TypeDisplay(ITypeSymbol t) => t.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier));
             if (returnType.SpecialType == SpecialType.System_Void)
             {
-                if (parameterTypes.Count == 0)
-                    return "global::System.Action";
-
+                if (parameterTypes.Count == 0) return "global::System.Action";
                 var args = string.Join(", ", parameterTypes.Select(TypeDisplay));
                 return $"global::System.Action<{args}>";
             }
             else
             {
-                if (parameterTypes.Count == 0)
-                    return $"global::System.Func<{TypeDisplay(returnType)}>";
-
+                if (parameterTypes.Count == 0) return $"global::System.Func<{TypeDisplay(returnType)}>";
                 var args = string.Join(", ", parameterTypes.Select(TypeDisplay).Concat(new[] { TypeDisplay(returnType) }));
                 return $"global::System.Func<{args}>";
             }
