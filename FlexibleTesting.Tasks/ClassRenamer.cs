@@ -7,6 +7,17 @@ using System.Linq;
 
 namespace FlexibleTesting;
 
+/// <summary>
+/// Documentation: https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/get-started/syntax-transformation#transform-trees-using-syntaxrewriters
+/// The reason these methods return a SyntaxNode instead of the more specific type is because you can change the node to a different type to replace it.
+/// Also, all of these overrides are recursive, so you probably want to do base.Visit at the end of each method.
+/// Returning null deletes the node.
+/// 
+/// Better alternatives could be:
+/// * DocumentEditor 
+/// * SyntaxGenerator
+/// * Renamer
+/// </summary>
 public class ClassRenamer : CSharpSyntaxRewriter
 {
     private readonly SemanticModel _semanticModel;
@@ -19,39 +30,35 @@ public class ClassRenamer : CSharpSyntaxRewriter
         _semanticModel = semanticModel;
         _oldName = oldName;
         _newName = newName;
-        // We zetten de symbolen direct om naar signatures voor snelle vergelijking
         _methodsToMakePublicSignatures = methodsToMakePublic.Select(m => m.ToSignatureString()).ToList();
     }
 
-    public override SyntaxNode VisitClassDeclaration(ClassDeclarationSyntax node)
+    public override SyntaxNode VisitClassDeclaration(ClassDeclarationSyntax @class)
     {
-        // 1. Bezoek eerst de kinderen (methoden) zodat de SemanticModel ze nog kan vinden
-        var visitedNode = (ClassDeclarationSyntax)base.VisitClassDeclaration(node);
-
-        // 2. Pas daarna de naam van de klasse aan
-        if (visitedNode.Identifier.Text == _oldName)
+        if (@class.Identifier.Text == _oldName)
         {
-            visitedNode = visitedNode.WithIdentifier(SyntaxFactory.Identifier(_newName));
+            @class = @class.WithIdentifier(SyntaxFactory.Identifier(_newName));
         }
 
-        return visitedNode;
+        return base.VisitClassDeclaration(@class)!;
     }
 
-    public override SyntaxNode VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
+    public override SyntaxNode VisitConstructorDeclaration(ConstructorDeclarationSyntax constructor)
     {
-        // Constructors moeten ook de nieuwe klassenaam krijgen
-        if (node.Identifier.Text == _oldName)
+        if (constructor.Identifier.Text == _oldName)
         {
-            node = node.WithIdentifier(SyntaxFactory.Identifier(_newName));
+            constructor = constructor.WithIdentifier(SyntaxFactory.Identifier(_newName));
         }
-        return base.VisitConstructorDeclaration(node);
+        return base.VisitConstructorDeclaration(constructor)!;
     }
 
     public override SyntaxNode VisitMethodDeclaration(MethodDeclarationSyntax node)
     {
         var symbol = _semanticModel.GetDeclaredSymbol(node);
         if (symbol == null)
+        {
             return base.VisitMethodDeclaration(node);
+        }
 
         if (_methodsToMakePublicSignatures.Contains(symbol.ToSignatureString()))
         {
@@ -87,3 +94,41 @@ public class ClassRenamer : CSharpSyntaxRewriter
         return base.VisitMethodDeclaration(node);
     }
 }
+/* Is this better?
+public async Task<Document> MakeSignaturesPublicAsync(Document document, HashSet<string> targetSignatures)
+{
+    // 1. Initialiseer de editor en generator
+    var editor = await DocumentEditor.CreateAsync(document);
+    var generator = editor.Generator;
+    var semanticModel = await document.GetSemanticModelAsync();
+    var root = await document.GetSyntaxRootAsync();
+
+    // 2. Zoek alle methode-declaraties in het document
+    var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
+
+    foreach (var method in methods)
+    {
+        var symbol = semanticModel.GetDeclaredSymbol(method);
+        if (symbol == null) continue;
+
+        // 3. Controleer of de signature overeenkomt met je lijst
+        if (targetSignatures.Contains(symbol.ToSignatureString()))
+        {
+            // Bewaar de originele declaratie voor de comment (zonder body)
+            var originalDesc = method.WithBody(null).WithSemicolonToken(default).ToString().Trim();
+            var commentTrivia = SyntaxFactory.Comment($" // Original: {originalDesc}");
+
+            // 4. Maak de methode public
+            // SetAccessibility verwijdert automatisch modifiers zoals 'private' of 'internal'
+            editor.SetAccessibility(method, Accessibility.Public);
+
+            // 5. Voeg de comment toe aan de parameterlijst (TrailingTrivia)
+            var newParameterList = method.ParameterList.WithAppendedTrailingTrivia(commentTrivia);
+            editor.ReplaceNode(method.ParameterList, newParameterList);
+        }
+    }
+
+    // 6. Geef het bijgewerkte document terug
+    return editor.GetChangedDocument();
+}
+*/
