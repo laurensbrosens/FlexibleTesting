@@ -1,118 +1,148 @@
-﻿using LegacyCodeProject.Core;
+namespace LegacyCodeProjectTests;
+
+using LegacyCodeProject.Core;
 using LegacyCodeProject.Viewmodels;
 using NSubstitute;
-
-namespace LegacyCodeProjectTests;
 
 public class UserViewModelTests
 {
     [Test]
-    public void Constructor_sets_DefaultName()
+    public void Constructor_WhenInitialized_ShouldSetDefaultName()
     {
         // Arrange
-        var mock = Substitute.For<IAutoUserViewModelDependencies>();
         var data = new SomeDataObject();
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        deps.Now.Returns(() => DateTime.Now);
 
         // Act
-        var vm = new UserViewModel_G(data, mock);
+        var vm = new UserViewModel_G(data, deps);
 
         // Assert
         Assert.That(vm.Name, Is.EqualTo("Default"));
     }
 
     [Test]
-    public void OnLoad_sets_Name_to_Test()
+    public void Constructor_WhenInitialized_ShouldSetDateTimeFromDependency()
     {
         // Arrange
-        var mock = Substitute.For<IAutoUserViewModelDependencies>();
         var data = new SomeDataObject();
-        var vm = new UserViewModel_G(data, mock);
-        vm.Name = "Before";
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var expectedDate = new DateTime(2026, 4, 15);
+        deps.Now.Returns(() => expectedDate);
 
         // Act
-        //vm.OnLoad(null, EventArgs.Empty);
+        var vm = new UserViewModel_G(data, deps);
 
         // Assert
-        Assert.That(vm.Name, Is.EqualTo("Test"));
+        Assert.That(vm.DateTime, Is.EqualTo(expectedDate));
     }
 
     [Test]
-    public void Changing_SomeDataObject_property_triggers_LoadEvent()
+    public void NameProperty_WhenSet_ShouldInvokeOnPropertyChanged()
     {
         // Arrange
-        var mock = Substitute.For<IAutoUserViewModelDependencies>();
         var data = new SomeDataObject();
-        var vm = new UserViewModel_G(data, mock);
-        
-        bool loadEventFired = false;
-        //vm.LoadEvent += (sender, e) => loadEventFired = true;
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        deps.Now.Returns(() => DateTime.Now);
+        var vm = new UserViewModel_G(data, deps);
 
-        // Act - Change a property in SomeDataObject
-        data.MyProperty = 42;
+        // Act
+        vm.Name = "Changed Name";
 
         // Assert
-        Assert.That(loadEventFired, Is.True);
-    }
-}
-/* Old code
-
-
-// Example of what the generated class would look like:
-public class UserViewModel_g : BaseViewModel_g //: BaseViewModel
-{
-    // Auto-generated new members:
-    private readonly IAutoDependencies _dependencies;
-
-    public UserViewModel_g(SomeDataObject someDataObject, IAutoDependencies dependencies, IAutoDependenciesBase baseDependencies)
-        : base(someDataObject, baseDependencies)
-    {
-        _dependencies = dependencies;
-        Name = "Default";
-        DateTime = _dependencies.Now();
-        _userService = _dependencies.UserService;
+        deps.Received().OnPropertyChanged("Name");
     }
 
-    public string Name
+    [Test]
+    public void SomePrivateMethod_WhenCalled_ShouldUpdateNameProperty()
     {
-        get;
-        set
+        // Arrange
+        var data = new SomeDataObject();
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        deps.Now.Returns(() => DateTime.Now);
+        var vm = new UserViewModel_G(data, deps);
+
+        // Act
+        vm.SomePrivateMethod();
+
+        // Assert
+        Assert.That(vm.Name, Is.EqualTo("Something to test"));
+    }
+    /* 
+    // Commented out until inheritance mocking functionality is implemented
+    
+    [Test]
+    public void Constructor_Sets_InitialValues_And_Mocks_StaticCalls()
+    {
+        // Arrange
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var baseDeps = Substitute.For<IAutoBaseViewModelDependencies>();
+        var data = new SomeDataObject();
+        var expectedDate = new DateTime(2026, 4, 15);
+        
+        deps.Now().Returns(expectedDate);
+
+        // Act
+        var vm = new UserViewModel_G(data, deps, baseDeps);
+
+        // Assert
+        Assert.Multiple(() =>
         {
-            field = value;
-            _dependencies.OnPropertyChanged();
-        }
+            Assert.That(vm.Name, Is.EqualTo("Default"));
+            Assert.That(vm.DateTime, Is.EqualTo(expectedDate));
+        });
     }
 
-    public DateTime DateTime { get; set; }
-
-    protected override void OnLoad(object? sender, EventArgs e)
+    [Test]
+    public void Setting_Name_Triggers_OnPropertyChanged_On_Dependencies()
     {
-        base.OnLoad(sender, e); // Or _dependencies.OnLoad(sender, e);?
-        Name = "Test";
+        // Arrange
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var baseDeps = Substitute.For<IAutoBaseViewModelDependencies>();
+        var data = new SomeDataObject();
+        var vm = new UserViewModel_G(data, deps, baseDeps);
+
+        // Act
+        vm.Name = "Changed Name";
+
+        // Assert
+        deps.Received().OnPropertyChanged("Name");
     }
 
-    private IUserService _userService;
-
-
-}
-
-public interface IAutoDependencies
-{
-    Func<DateTime> Now { get; }
-    IUserService UserService { get; }
-    void OnPropertyChanged([CallerMemberName] string propertyName = null!); // Note, the generator has to check for [CallerMemberName]!
-}
-
-public interface IAutoDependenciesBase
-{
-    void OnLoad(object? sender, EventArgs e);
-}
-public interface IUserService { }
-
-public class BaseViewModel_g(SomeDataObject someDataObject, IAutoDependenciesBase dependencies)
-{
-    protected virtual void OnLoad(object? sender, EventArgs e)
+    [Test]
+    public void OnLoad_Executes_SomePrivateMethod_Logic_Inheritance()
     {
-        dependencies.OnLoad(sender, e);
+        // Arrange
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var baseDeps = Substitute.For<IAutoBaseViewModelDependencies>();
+        var data = new SomeDataObject();
+        var vm = new UserViewModel_G(data, deps, baseDeps);
+
+        // Act
+        vm.OnLoad(null, EventArgs.Empty);
+
+        // Assert
+        Assert.That(vm.Name, Is.EqualTo("Something to test"));
     }
+
+    [Test]
+    public void SomePrivateMethod_Calls_Mocked_UserService_With_Correct_Data_Inheritance()
+    {
+        // Arrange
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var baseDeps = Substitute.For<IAutoBaseViewModelDependencies>();
+        var data = new SomeDataObject();
+        var userServiceMock = Substitute.For<IUserService>(); 
+        
+        deps.UserService().Returns(userServiceMock);
+        
+        var vm = new UserViewModel_G(data, deps, baseDeps);
+
+        // Act
+        vm.SomePrivateMethod();
+
+        // Assert
+        userServiceMock.Received().GetUserName("Something to test");
+    }
+    */
 }
-*/
