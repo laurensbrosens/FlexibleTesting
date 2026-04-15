@@ -1,259 +1,215 @@
-Somewhat relevant example:
-https://github.com/dotnet/roslyn/blob/main/docs/features/incremental-generators.cookbook.md#unit-testing-of-generators
-Use AddEmbeddedAttributeDefinition to prevent problems with duplicate attribute names
+# FlexibleTesting
 
-If found no examples of creating a builder to specify on how a generator works. I wonder if it is performant to find a 
-class file based on class type? The cookbook specifically says that using an interface as marker instead of an attribute
-is significantly less efficient and considered bad practice (for source generators).
+FlexibleTesting is a compile-time mocking framework for C#. It allows you to unit test legacy code—including WPF ViewModels, without heavy refactoring. It generates a "testable copy" with a `_G` suffix of your class and applies surgical rewrites to bypass side effects like static calls, database requests, and protected encapsulation.
 
-Debugging is hard, but exceptions seem to work (visible in build output)
+## Getting Started
 
-Limitation: Generated code has to be in the same project as the legacy code (because I can't copy it's content otherwise).
-
-## Goal
-
-Make extremely large legacy C# code unit-testable (including WPF ViewModels) without heavy refactors, by compiling a “testable copy” and applying controlled rewrites (dependencies, inheritance) via a source generator (+ analyzer). The developer writes normal unit tests (xUnit/NUnit) and can still use NSubstitute/FluentValidation.
-
----
-
-## Final approach (high level)
-
-1. Copy the SUT source file(s) into a test project (or a dedicated “generated tests” project).
-2. Lock the copied file(s) against the original (checksum/AST fingerprint) so changes in production invalidate the test copy and force re-sync.
-3. Apply source-generation rewrites to make code testable without hitting IO/network/time/etc., using two mechanisms:
-   - Call-site overwrites (symbol-based) using strongly typed `Expression<TDelegate>` rules.
-   - Base-type replacement (inheritance rewrite) so heavy base constructors never run (common for legacy MVVM base classes).
-4. Optional: “publicize” members so tests can directly call what used to be `protected`/`internal`.
-5. Run normal unit tests against the generated/testable types.
-
----
-
-## One step-by-step workflow (developer experience)
-
-1. Enable internal visibility (only if you need it)
-   - In the production assembly: `InternalsVisibleTo("Legacy.Tests")` so copied code can compile when it touches `internal` members.
-
-2. Copy legacy source into a testable project
-   - Keep original `using`s and compile with the same NuGet/project references to avoid “missing types” noise.
-
-3. Add a lock check
-   - Your tool stores a fingerprint of the production file. If production changes, the test copy is marked stale and the build fails with a clear message (“re-copy required”).
-
-4. Define rewrite rules in code (compile-time checked)
-   - One registry for overwriting method/property/constructor call sites.
-   - One registry for base-type replacement to avoid running heavy base constructors.
-
-5. (Optional) Enable “PublicizeOverrides”
-   - Generator rewrites members in the copied SUT to be `public` so tests can call them directly.
-
-6. Write normal unit tests
-   - Use NUnit + NSubstitute/FluentValidation as usual.
-
----
-
-## Consistent developer-side code examples (fluent style)
-
-### 1) Call-site overwrites (static + instance + extension methods)
+To test a legacy class, create a builder class marked with `[GeneratorInstructions]`. This class instructs the MSBuild task on how to rewrite the target.
 
 ```csharp
-namespace Legacy.Tests.Generation;
-
-using System.Linq.Expressions;
-using System.IO;
-
-public static class Overwrites
+[GeneratorInstructions]
+internal class UserViewModelBuilder : IGeneratorInstructions
 {
-    public static void Replace<TDelegate>(Expression<TDelegate> target, Expression<TDelegate> replacement)
-        where TDelegate : Delegate
-    { }
-}
-
-public static class LegacyOverwriteRules
-{
-    public static void Configure()
+    public void Configure()
     {
-        Overwrites.Replace<Func<DateTime>>(
-            () => DateTime.Now,
-            () => TestClock.Now);
-
-        Overwrites.Replace<Func<string, string>>(
-            path => File.ReadAllText(path),
-            path => TestFile.ReadAllText(path));
-
-        // Extension methods also work: the expression resolves to the extension method symbol.
-        Overwrites.Replace<Func<string, bool>>(
-            s => s.IsValidEmail(),
-            s => TestEmail.IsValidEmail(s));
+        Overwrites.ForClass<UserViewModel>(); // Class to copy
+        Overwrites.MockInheritance(); // Mock parent class automatically
+        Overwrites.Mockable(() => DateTime.Now); // Add methods to mock
+        Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad); // Add methods to make public
     }
 }
 ```
 
-### 2) Property get/set overwrites (strongly typed)
+## Usage Examples
+
+### Mocking Static Calls
+Redirect problematic static calls (like `DateTime.Now` or `Guid.NewGuid`) to a mockable dependency.
+```csharp
+// In Builder:
+Overwrites.Mockable(() => DateTime.Now);
+
+// In Test:
+_dependencies.Now().Returns(new DateTime(2026, 4, 14));
+```
+
+### Publicizing Private Members
+Test private or protected methods without using Reflection.
+```csharp
+Overwrites.MakePublic<IShadow, Action>(x => x.InternalMethod);
+// Rewrites the method to public in the generated UserViewModel_G
+```
+
+### Bypassing Heavy Inheritance (Not implemented yet)
+Replace a base class that has side effects in its constructor with an auto-generated copy.
+```csharp
+Overwrites.MockInheritance(); 
+class UserViewModel_G : BaseViewModel_G // instead of : BaseViewModel
+```
+
+### Mocking Internal Services (Not implemented yet)
+Automatically generate an interface for a concrete legacy service and redirect all usages.
+```csharp
+Overwrites.Mock<UserService>(); 
+// Original:
+_userService = new UserService();
+
+// Copy:
+_userService = _dependencies.UserService(); // Mockable dependency
+```
+
+### Call-site Replacement (Not implemented yet)
+Hard-swap a property or method call site with a specific test implementation.
+```csharp
+Overwrites.ReplaceProperty(() => DateTime.Now, () => TestClock.Now);
+Overwrites.Replace(s => s.IsValidEmail(), TestEmail.IsValidEmail);
+```
+
+### Stacking Instructions (Not implemented yet)
+Reuse common overwrite rules across multiple builders.
+```csharp
+Overwrites.Include<BaseBuilder>();
+```
+
+## Testing the Generated Class
+The generator produces a class named `{ClassName}_G` and a specific interface `IAuto{ClassName}Dependencies`. Use your favorite mocking library (like NSubstitute) to verify behavior.
 
 ```csharp
-namespace Legacy.Tests.Generation;
-
-using System.Linq.Expressions;
-
-public static class PropertyOverwrites
+[Test]
+public void Constructor_Sets_Default_Date()
 {
-    public static void ReplaceGet<TDelegate>(Expression<TDelegate> target, Expression<TDelegate> replacement)
-        where TDelegate : Delegate
-    { }
-
-    public static void ReplaceSet<TDelegate>(Expression<TDelegate> target, Expression<TDelegate> replacement)
-        where TDelegate : Delegate
-    { }
+    var mock = Substitute.For<IAutoUserViewModelDependencies>();
+    var vm = new UserViewModel_G(new SomeDataObject(), mock);
+    
+    Assert.That(vm.DateTime, Is.EqualTo(mock.Now()));
 }
-
-public static class LegacyPropertyRules
+```
+## Full example generated class
+```csharp
+[GeneratorInstructions]
+internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewModel(someDataObject), IGeneratorInstructions
 {
-    public static void Configure()
+    public void Configure()
     {
-        PropertyOverwrites.ReplaceGet<Func<User, string>>(
-            u => u.HomeDir,
-            u => TestUserPaths.HomeDir(u));
-
-        PropertyOverwrites.ReplaceSet<Action<User, string>>(
-            (u, v) => u.HomeDir = v,
-            (u, v) => TestUserPaths.SetHomeDir(u, v));
+        Overwrites.ForClass<UserViewModel>();
+        Overwrites.Mockable(() => DateTime.Now);
+        // Overwrites.Mockable(() => OnPropertyChanged); MockInheritance already handles this
+        Overwrites.Mockable(() => SomePrivateMethod);
+        Overwrites.Mock<UserService>();
+        Overwrites.MockInheritance();
+        Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad);
+        Overwrites.MakePublic<IShadow, Action>(x => x.SomePrivateMethod);
+    }
+    private interface IShadow // This is a hack for private members
+    {
+        // Signature has to be identical to the one in UserViewModel
+        public void IReallyWantToTestThisMethod(); 
     }
 }
 ```
-
-### 3) Constructor overwrites (redirect `new` to a factory)
-
 ```csharp
-namespace Legacy.Tests.Generation;
-
-using System.Linq.Expressions;
-
-public static class ConstructorOverwrites
+public class UserViewModel : BaseViewModel
 {
-    public static void Replace<TDelegate>(Expression<TDelegate> target, Expression<TDelegate> replacement)
-        where TDelegate : Delegate
-    { }
-}
-
-public static class LegacyConstructorRules
-{
-    public static void Configure()
+    public UserViewModel()
     {
-        ConstructorOverwrites.Replace<Func<string, SqlRepository>>(
-            cs => new SqlRepository(cs),
-            cs => TestFactories.CreateSqlRepository(cs));
+        Name = "Default";
+        DateTime = DateTime.Now; // Test
+        _userService = new UserService();
+    }
+
+    public string Name
+    {
+        get;
+        set
+        {
+            field = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public DateTime DateTime { get; set; }
+
+    protected override void OnLoad(object? sender, EventArgs e)
+    {
+        base.OnLoad(sender, e);
+        SomePrivateMethod();
+    }
+
+    private UserService _userService;
+
+    private void SomePrivateMethod()
+    {
+        Name = "Something to test";
+        _userService.GetUserName(Name);
     }
 }
 ```
-
-### 4) Base-type replacement (inheritance rewrite) with developer-authored fake base
-
-This solves “huge base class + ctor must never run” (common MVVM issue). The developer writes the fake base themselves; the generator only rewrites inheritance.
-
 ```csharp
-namespace Legacy.Tests.Fakes;
-
-using System.ComponentModel;
+// <auto-generated/>
+using LegacyCodeProject.Core;
 using System.Runtime.CompilerServices;
 
-public abstract class NotifyBase : INotifyPropertyChanged
+namespace LegacyCodeProject.Viewmodels;
+public class UserViewModel_G : BaseViewModel_G
 {
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    protected void Raise([CallerMemberName] string? name = null) =>
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-}
-
-// Developer-authored fake base for the heavy legacy base:
-public abstract class HeavyBaseViewModel_Fake : NotifyBase
-{
-    public virtual Task OnLoadedAsync(CancellationToken ct) => Task.CompletedTask;
-
-    public virtual void Navigate(string target) { /* record/log if needed */ }
-
-    public virtual string Title { get; set; } = "";
-}
-```
-
-Mapping rule (generator reads this, then rewrites inheritance in the copied SUT):
-
-```csharp
-namespace Legacy.Tests.Generation;
-
-public static class FakeBases
-{
-    public static FakeBaseMapBuilder Map<TRealBase, TFakeBase>() => new();
-
-    public sealed class FakeBaseMapBuilder
+    private readonly IAutoUserViewModelDependencies _dependencies;
+    public UserViewModel_G(IAutoUserViewModelDependencies deps, IAutoBaseViewModelDependencies baseDeps) : base(baseDependencies)
     {
-        public FakeBaseMapBuilder PublicizeOverrides(bool enabled = true) => this;
+        _dependencies = deps;
+        Name = "Default";
+        DateTime = _dependencies.Now() /* Original: DateTime.Now */; // Test
+        _userService = _dependencies.UserService(); // Original: new UserService();
+    }
+
+    public string Name
+    {
+        get;
+        set
+        {
+            field = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public DateTime DateTime { get; set; }
+
+    public override void OnLoad(object? sender, EventArgs e)
+    {
+        base.OnLoad(sender, e);
+        SomePrivateMethod();
+    }
+
+    private UserService _userService;
+    public void SomePrivateMethod()  // Original: private void SomePrivateMethod()
+    {
+        Name = "Something to test";
+        _userService.GetUserName(Name);
     }
 }
 
-public static class LegacyFakeBaseRules
+/// <summary>Mock this using NSubstitute</summary>
+public interface IAutoUserViewModelDependencies
 {
-    public static void Configure()
+    global::System.Func<global::System.DateTime> Now { get; }
+
+    void OnPropertyChanged([CallerMemberName] global::System.String propertyName = "");
+}
+
+public class BaseViewModel_G(IAutoBaseViewModelDependencies dependencies)
+{
+    public virtual void OnLoad(object? sender, EventArgs e)
     {
-        FakeBases
-            .Map<HeavyBaseViewModel, HeavyBaseViewModel_Fake>()
-            .PublicizeOverrides(); // optional default
+        dependencies.OnLoad(sender, e);
+    }
+
+    public void OnPropertyChanged([CallerMemberName] global::System.String propertyName = "")
+    {
+        dependencies.OnPropertyChanged(propertyName);
     }
 }
+
+/// <summary>Mock this using NSubstitute</summary>
+public interface IAutoBaseViewModelDependencies
+{
+    void OnLoad(object? sender, EventArgs e);
+}
 ```
-
-What the generator does to the copied SUT:
-
-- `class CustomerViewModel : HeavyBaseViewModel` → `class CustomerViewModel : HeavyBaseViewModel_Fake`
-- If `PublicizeOverrides` is enabled, it rewrites `protected override` → `public override` so tests can call those members directly.
-
----
-
-## Diagnostics (recommended)
-
-Add a Roslyn analyzer (or generator diagnostics) to improve the developer experience:
-
-- Detect missing members on the fake base and report a single clear error (“HeavyBaseViewModel_Fake is missing virtual member X required by CustomerViewModel”), instead of dozens of cascading compiler errors.
-- Validate overwrite rules: ambiguous overloads, unsupported expression shapes, replacement signature mismatch, etc.
-- Report “rule matches 0 call sites” (useful when legacy code changes).
-
----
-
-## Features and modes (summary)
-
-Core features
-
-- File-copy-based test compilation with lock/fingerprint invalidation.
-- References and `using`s allowed (compiles with real type info).
-- Expression-based overwrites for:
-  - static methods/properties (`DateTime.Now`, `Guid.NewGuid`)
-  - instance methods/properties
-  - extension methods
-  - constructors (`new T(...)`)
-- Base-type replacement via inheritance rewrite (avoid heavy base constructors).
-- Optional “PublicizeOverrides” mode to rewrite accessibility to `public` for direct testing.
-- Analyzer-backed diagnostics for missing fake members and invalid overwrite rules.
-
-Suggested modes
-
-- Safe mode: only allow call-site overwrites (Expression rules). No free-form edits. Best for keeping tests representative.
-- Flexible mode: allow base-type replacement + publicize overrides + call-site overwrites (still rule-driven).
-- All mode: allow arbitrary edits to the copied source (maximum power, highest drift risk). Useful as an escape hatch.
-
----
-
-## Advantages
-
-- Makes very large legacy code testable without refactoring the production project.
-- Works for hard-to-mock patterns (static calls, constructors, extension methods) because rewrites happen at the source level.
-- Enables fast ViewModel unit tests even when the real base constructor is unusable (replace base with fake).
-- Strong compile-time feedback for overwrite rules (expression + generics ensure signature compatibility).
-- Keeps tests “normal”: xUnit/NUnit, plus NSubstitute/FluentValidation remain usable.
-
----
-
-## Disadvantages / risks
-
-- You are effectively testing a generated/copy variant; drift is a real risk if not controlled.
-- Requires generator/analyzer engineering effort (especially for good diagnostics and robust symbol matching).
-- Publicizing members changes encapsulation in the test copy (acceptable for test-only code, but still a semantic change).
-- Maintenance overhead: when production code changes, lock invalidation forces re-copy/regen and potentially fake-base updates.

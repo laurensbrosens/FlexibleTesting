@@ -17,13 +17,13 @@ internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewMod
         Overwrites.Mockable(() => DateTime.Now);
         Overwrites.Mockable(() => OnPropertyChanged);
         //Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad); // Don't need IShadow, does not work for private of course, but works for protected, internal and protected internal
-        Overwrites.MakePublic<IShadow, Action>(x => x.IReallyWantToTestThisMethod);
+        Overwrites.MakePublic<IShadow, Action>(x => x.SomePrivateMethod);
         // Overwrites.MakePublic("OnLoad"); I want to prevent allowing string based API
     }
 
     private interface IShadow // This is a hack for private members
     {
-        public void IReallyWantToTestThisMethod();
+        public void SomePrivateMethod();
     }
 }
 

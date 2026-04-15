@@ -8,7 +8,7 @@ public class UserService
             Console.WriteLine("UserService created");
         }
     
-        public string GetUserName(int userId)
+        public string GetUserName(string userId)
         {
             // Imagine this method makes a database call or something else that we want to avoid in tests
             return $"User{userId}";
