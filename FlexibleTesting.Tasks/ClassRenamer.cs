@@ -12,9 +12,9 @@ namespace FlexibleTesting;
 /// The reason these methods return a SyntaxNode instead of the more specific type is because you can change the node to a different type to replace it.
 /// Also, all of these overrides are recursive, so you probably want to do base.Visit at the end of each method.
 /// Returning null deletes the node.
-/// 
+///
 /// Better alternatives could be:
-/// * DocumentEditor 
+/// * DocumentEditor
 /// * SyntaxGenerator
 /// * Renamer
 /// </summary>
@@ -33,14 +33,15 @@ public class ClassRenamer : CSharpSyntaxRewriter
         _methodsToMakePublicSignatures = methodsToMakePublic.Select(m => m.ToSignatureString()).ToList();
     }
 
-    public override SyntaxNode VisitClassDeclaration(ClassDeclarationSyntax @class)
+    public override SyntaxNode VisitClassDeclaration(ClassDeclarationSyntax node)
     {
-        if (@class.Identifier.Text == _oldName)
+        var classDecl = (ClassDeclarationSyntax)base.VisitClassDeclaration(node)!;
+        if (classDecl.Identifier.Text == _oldName)
         {
-            @class = @class.WithIdentifier(SyntaxFactory.Identifier(_newName));
+            classDecl = classDecl.WithIdentifier(SyntaxFactory.Identifier(_newName));
         }
 
-        return base.VisitClassDeclaration(@class)!;
+        return classDecl;
     }
 
     public override SyntaxNode VisitConstructorDeclaration(ConstructorDeclarationSyntax constructor)
