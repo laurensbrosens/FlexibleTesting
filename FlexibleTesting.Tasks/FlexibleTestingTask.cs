@@ -31,6 +31,10 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     // Legacy project sources (e.g. LegacyCodeProject)
     public ITaskItem[] LegacySourceFiles { get; set; } = Array.Empty<ITaskItem>();
 
+    // Path to legacy project file (e.g., ..\LegacyCodeProject\LegacyCodeProject.csproj)
+    // When provided, source files will be discovered from this project instead of using LegacySourceFiles
+    public string LegacyProjectPath { get; set; } = string.Empty;
+
     // Assembly name of legacy project (used to filter out its DLL from references for the legacy source compilation)
     public string LegacyAssemblyName { get; set; } = string.Empty;
 
@@ -68,6 +72,15 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             OutputPath = Path.GetFullPath(OutputPath);
 
             Log.LogMessage(MessageImportance.High, $"FlexibleTestingTask running for {TestProjectDisplay}. OutputPath={OutputPath}");
+
+            // If LegacyProjectPath is provided, discover source files from it
+            if (!string.IsNullOrWhiteSpace(LegacyProjectPath) && LegacySourceFiles.Length == 0)
+            {
+                var discoveredFiles = DiscoverSourceFilesFromProject(LegacyProjectPath);
+                LegacySourceFiles = discoveredFiles.Select(f => 
+                    new Microsoft.Build.Utilities.TaskItem(f) as ITaskItem).ToArray();
+                Log.LogMessage(MessageImportance.High, $"Discovered {LegacySourceFiles.Length} source files from legacy project: {LegacyProjectPath}");
+            }
 
             // Log all input parameters
             Log.LogMessage(MessageImportance.High, $"Input Parameters:");
@@ -1008,6 +1021,74 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }
 
         return solution;
+    }
+
+    private List<string> DiscoverSourceFilesFromProject(string projectPath)
+    {
+        var result = new List<string>();
+
+        // Normalize the project path
+        if (!Path.IsPathRooted(projectPath))
+        {
+            if (!string.IsNullOrWhiteSpace(TestProjectDirectory))
+            {
+                projectPath = Path.Combine(TestProjectDirectory, projectPath);
+            }
+        }
+
+        projectPath = Path.GetFullPath(projectPath);
+
+        // Get the directory containing the project file
+        var projectDirectory = Path.GetDirectoryName(projectPath) ?? string.Empty;
+
+        if (!Directory.Exists(projectDirectory))
+        {
+            Log.LogWarning($"[{TestProjectDisplay}] Legacy project directory does not exist: {projectDirectory}");
+            return result;
+        }
+
+        // Find all .cs files, excluding bin, obj, and generated files (.g.cs)
+        var searchPattern = "*.cs";
+        var csFiles = Directory.GetFiles(projectDirectory, searchPattern, SearchOption.AllDirectories);
+
+        foreach (var file in csFiles)
+        {
+            // Exclude bin and obj directories
+            var normalizedPath = Path.GetFullPath(file);
+            var relativePath = GetRelativePath(projectDirectory, normalizedPath);
+
+            if (relativePath.StartsWith("bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                relativePath.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                relativePath.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                relativePath.Equals("obj", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Exclude generated files (.g.cs)
+            if (file.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            result.Add(normalizedPath);
+        }
+
+        return result;
+    }
+
+    private static string GetRelativePath(string basePath, string fullPath)
+    {
+        // Normalize paths to use consistent separators
+        basePath = Path.GetFullPath(basePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        fullPath = Path.GetFullPath(fullPath);
+
+        if (fullPath.StartsWith(basePath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            return fullPath.Substring(basePath.Length + 1);
+        }
+
+        return fullPath;
     }
 
     private List<MetadataReference> CreateMetadataReferences(

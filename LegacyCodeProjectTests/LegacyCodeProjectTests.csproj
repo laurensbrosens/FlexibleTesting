@@ -28,23 +28,17 @@
 		<ProjectReference Include="..\FlexibleTesting.Tasks\FlexibleTesting.Tasks.csproj" ReferenceOutputAssembly="false" />
 	</ItemGroup>
 
-	<ItemGroup>
-		<!-- Feed Project A sources to the task (no need to edit Project A) -->
-		<LegacyCodeSources Include="..\LegacyCodeProject\**\*.cs" Exclude="..\LegacyCodeProject\bin\**\*;..\LegacyCodeProject\obj\**\*;..\LegacyCodeProject\**\*.g.cs" />
-	</ItemGroup>
-
 	<!-- Visual Studio / Full MSBuild -->
-	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net472\FlexibleTesting.Tasks.dll" TaskFactory="TaskHostFactory"
-			   Condition="'$(MSBuildRuntimeType)' == 'Full'" />
+	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net472\FlexibleTesting.Tasks.dll" 
+			   TaskFactory="TaskHostFactory" Condition="'$(MSBuildRuntimeType)' == 'Full'" />
 
 	<!-- dotnet build / Core MSBuild -->
-	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll" TaskFactory="TaskHostFactory"
-			   Condition="'$(MSBuildRuntimeType)' != 'Full'" />
+	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll" 
+			   TaskFactory="TaskHostFactory" Condition="'$(MSBuildRuntimeType)' != 'Full'" />
 
 	<Target Name="GenerateFlexibleTesting" BeforeTargets="CoreCompile" AfterTargets="ResolveReferences;ResolveProjectReferences">
-		<FlexibleTestingTask ProjectFilePath="$(MSBuildProjectFullPath)" OutputPath="$(MSBuildProjectDirectory)\Generated" 
-							 SourceFiles="@(Compile)" References="@(ReferencePath)" LegacySourceFiles="@(LegacyCodeSources)" 
-							 LegacyAssemblyName="LegacyCodeProject" DefineConstants="$(DefineConstants)" />
+		<FlexibleTestingTask ProjectFilePath="$(MSBuildProjectFullPath)" OutputPath="$(MSBuildProjectDirectory)\Generated" SourceFiles="@(Compile)" 
+							 References="@(ReferencePath)" LegacyProjectPath="..\LegacyCodeProject\LegacyCodeProject.csproj" LegacyAssemblyName="LegacyCodeProject" DefineConstants="$(DefineConstants)" />
 	</Target>
 
   <ItemGroup>
