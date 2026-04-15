@@ -3,5 +3,6 @@
     <File Path="README.md" />
   </Folder>
   <Project Path="FlexibleTesting.Tasks/FlexibleTesting.Tasks.csproj" />
+  <Project Path="LegacyCodeProject/LegacyCodeProject.csproj" />
   <Project Path="LegacyCodeProjectTests/LegacyCodeProjectTests.csproj" Id="066c1f54-8020-43f7-875c-ad99ce2f668b" />
 </Solution>

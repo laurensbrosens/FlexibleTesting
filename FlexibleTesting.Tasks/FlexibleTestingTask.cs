@@ -68,6 +68,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     {
         try
         {
+            // System.Diagnostics.Debugger.Launch();
+
             // Use provided ProjectFilePath or get from MSBuild context
             if (string.IsNullOrWhiteSpace(ProjectFilePath))
             {
