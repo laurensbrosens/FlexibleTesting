@@ -53,7 +53,7 @@ public class UserViewModelTests
         vm.Name = "Changed Name";
 
         // Assert
-        deps.Received().OnPropertyChanged("Name");
+        baseDeps.Received().OnPropertyChanged("Name");
     }
 
     [Test]
@@ -72,19 +72,17 @@ public class UserViewModelTests
         // Assert
         Assert.That(vm.Name, Is.EqualTo("Something to test"));
     }
-    /* 
-    // Commented out until inheritance mocking functionality is implemented
-    
+
     [Test]
     public void Constructor_Sets_InitialValues_And_Mocks_StaticCalls()
     {
         // Arrange
         var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        var baseDeps = Substitute.For<IAutoBaseViewModelDependencies>();
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
         var data = new SomeDataObject();
         var expectedDate = new DateTime(2026, 4, 15);
-        
-        deps.Now().Returns(expectedDate);
+
+        deps.Now.Returns(() => expectedDate);
 
         // Act
         var vm = new UserViewModel_G(data, deps, baseDeps);
@@ -98,55 +96,76 @@ public class UserViewModelTests
     }
 
     [Test]
-    public void Setting_Name_Triggers_OnPropertyChanged_On_Dependencies()
+    public void Setting_Name_Triggers_OnPropertyChanged_On_BaseDependencies()
     {
         // Arrange
         var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        var baseDeps = Substitute.For<IAutoBaseViewModelDependencies>();
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
         var data = new SomeDataObject();
+        deps.Now.Returns(() => DateTime.Now);
         var vm = new UserViewModel_G(data, deps, baseDeps);
 
         // Act
         vm.Name = "Changed Name";
 
         // Assert
-        deps.Received().OnPropertyChanged("Name");
+        baseDeps.Received().OnPropertyChanged("Name");
     }
 
     [Test]
-    public void OnLoad_Executes_SomePrivateMethod_Logic_Inheritance()
+    public void Constructor_Calls_OnPropertyChanged()
     {
         // Arrange
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        var baseDeps = Substitute.For<IAutoBaseViewModelDependencies>();
         var data = new SomeDataObject();
-        var vm = new UserViewModel_G(data, deps, baseDeps);
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        deps.Now.Returns(() => DateTime.Now);
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
 
         // Act
-        vm.OnLoad(null, EventArgs.Empty);
+        var vm = new UserViewModel_G(data, deps, baseDeps);
 
         // Assert
-        Assert.That(vm.Name, Is.EqualTo("Something to test"));
+        // Constructor calls OnPropertyChanged() at the end
+        baseDeps.Received().OnPropertyChanged(Arg.Any<string>());
     }
 
     [Test]
-    public void SomePrivateMethod_Calls_Mocked_UserService_With_Correct_Data_Inheritance()
+    public void OnPropertyChanged_Is_Mockable_Through_BaseDependencies()
     {
         // Arrange
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        var baseDeps = Substitute.For<IAutoBaseViewModelDependencies>();
         var data = new SomeDataObject();
-        var userServiceMock = Substitute.For<IUserService>(); 
-        
-        deps.UserService().Returns(userServiceMock);
-        
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        deps.Now.Returns(() => DateTime.Now);
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
         var vm = new UserViewModel_G(data, deps, baseDeps);
 
+        baseDeps.ClearReceivedCalls();
+
         // Act
-        vm.SomePrivateMethod();
+        vm.OnPropertyChanged("TestProperty");
 
         // Assert
-        userServiceMock.Received().GetUserName("Something to test");
+        baseDeps.Received(1).OnPropertyChanged("TestProperty");
     }
-    */
+
+    [Test]
+    public void NameProperty_Get_Also_Triggers_OnPropertyChanged()
+    {
+        // Arrange
+        var data = new SomeDataObject();
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        deps.Now.Returns(() => DateTime.Now);
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+        var vm = new UserViewModel_G(data, deps, baseDeps);
+
+        baseDeps.ClearReceivedCalls();
+
+        // Act
+        var name = vm.Name;
+
+        // Assert
+        // The getter calls OnPropertyChanged
+        baseDeps.Received().OnPropertyChanged(Arg.Any<string>());
+        Assert.That(name, Is.EqualTo("Default"));
+    }
 }
