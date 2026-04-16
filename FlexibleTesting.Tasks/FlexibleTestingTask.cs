@@ -683,16 +683,12 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             }
         }
 
-        // Apply all replacements to the tree
-        var newRoot = currentRoot;
-        foreach (var (oldMember, newMember) in memberReplacements)
-        {
-            newRoot = newRoot.ReplaceNode(oldMember, newMember);
-        }
-
-        // If any replacements were made, update the document
+        // Apply all replacements to the tree at once using ReplaceNodes
+        // This avoids issues with stale node references when applying replacements sequentially
         if (memberReplacements.Count > 0)
         {
+            var replacementDict = memberReplacements.ToDictionary(x => x.oldMember, x => x.newMember);
+            var newRoot = currentRoot.ReplaceNodes(replacementDict.Keys, (oldNode, _) => replacementDict[oldNode]);
             var newDocument = document.WithSyntaxRoot(newRoot);
             return (newDocument, needsCallerMemberName);
         }
@@ -802,7 +798,10 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         // Build a list of replacements with tracking of node positions to handle stale references
         var replacements = new List<(SyntaxNode oldNode, SyntaxNode newNode)>();
 
-        var descendantNodes = node.DescendantNodes().Where(n => n is InvocationExpressionSyntax or MemberAccessExpressionSyntax).ToList();
+        // FIX: Gebruik DescendantNodesAndSelf en zorg dat we diep genoeg graven (ook in accessors van properties)
+        var descendantNodes = node.DescendantNodesAndSelf()
+            .Where(n => n is InvocationExpressionSyntax or MemberAccessExpressionSyntax or AccessorDeclarationSyntax)
+            .ToList();
 
         var nodesToReplaceWithSpecs = new List<(SyntaxNode Node, MockableSpec Spec)>();
 
@@ -854,20 +853,15 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             replacements.Add((nodeToReplace, replacement.WithTriviaFrom(nodeToReplace)));
         }
 
-        // Apply all replacements at once using ReplaceNodes if possible, otherwise sequentially with fresh lookups
-        var currentNode = node;
-        foreach (var (oldNode, newNode) in replacements)
+        // Apply all replacements at once using ReplaceNodes to avoid stale node references
+        if (replacements.Count > 0)
         {
-            // Search for a node that matches the original in the current tree
-            var matchingNode = currentNode.DescendantNodesAndSelf().FirstOrDefault(n => n.IsEquivalentTo(oldNode));
-
-            if (matchingNode != null)
-            {
-                currentNode = currentNode.ReplaceNode(matchingNode, newNode);
-            }
+            var replacementDict = replacements.ToDictionary(x => x.oldNode, x => x.newNode);
+            var resultNode = node.ReplaceNodes(replacementDict.Keys, (oldNode, _) => replacementDict[oldNode]);
+            return resultNode;
         }
 
-        return currentNode;
+        return node;
     }
 
     private static bool SymbolsMatch(ISymbol? a, ISymbol? b)
@@ -905,19 +899,25 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
     private static MockableSpec? GetMockableSpecForNode(SyntaxNode node, SemanticModel semanticModel, IReadOnlyList<MockableSpec> mockables)
     {
-        var test = semanticModel.GetDiagnostics();
+        // Probeer direct het symbool op te halen voor de node
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
+
+        // Als dat niet lukt, kijk specifiek naar de naam van de member access
         if (symbol == null && node is MemberAccessExpressionSyntax mae)
             symbol = semanticModel.GetSymbolInfo(mae.Name).Symbol;
+
+        // Voor method calls: check de expressie (bijv. de methode-naam voor de haakjes)
         if (symbol == null && node is InvocationExpressionSyntax inv)
             symbol = semanticModel.GetSymbolInfo(inv.Expression).Symbol;
 
-        if (symbol == null)
-            return null;
-
+        // Als het een property is, vallen getters/setters onder IPropertySymbol
+        if (symbol is IPropertySymbol || symbol is IMethodSymbol)
+        {
             var fullQualifiedName = symbol.ContainingType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-
             return mockables.FirstOrDefault(m => m.MemberName == symbol.Name && m.ContainingTypeFullName == fullQualifiedName);
+        }
+
+        return null;
     }
 
     private static SyntaxNode BuildDependenciesInterface(SyntaxGenerator generator, FlexibleTestingInstructions instructions)

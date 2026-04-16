@@ -10,13 +10,20 @@ public class UserViewModel : BaseViewModel
         Name = "Default";
         DateTime = DateTime.Now; // Test
         _userService = new UserService();
+        OnPropertyChanged();
     }
+    public DateTime Now { get; set; }
 
     public string Name
     {
-        get;
+        get
+        {
+            OnPropertyChanged();
+            return field;
+        }
         set
         {
+            DateTime = DateTime.Now; // Test
             field = value;
             OnPropertyChanged();
         }
@@ -28,6 +35,7 @@ public class UserViewModel : BaseViewModel
     {
         base.OnLoad(sender, e);
         SomePrivateMethod();
+        OnPropertyChanged();
     }
 
     private UserService _userService;
