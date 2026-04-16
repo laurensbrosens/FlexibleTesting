@@ -304,7 +304,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         IReadOnlyList<MockableSpec> Mockables,
         string DependenciesInterfaceName,
         string DependenciesFieldName,
-        string DependenciesParameterName
+        string DependenciesParameterName,
+        bool MockInheritance
     );
 
     private void GenerateForFlexibleTesting(
@@ -330,6 +331,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         var methodsToMakePublicFromTest = new List<IMethodSymbol>();
         var mockablesFromTest = new List<MockableSpec>();
         INamedTypeSymbol? targetTypeFromTest = null;
+        var mockInheritanceFromTest = false;
 
         var invocations = configureMethod.Body.DescendantNodes().OfType<InvocationExpressionSyntax>();
         foreach (var invocation in invocations)
@@ -350,6 +352,10 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
                 case "Mockable":
                     AddToMockable(semanticModelB, mockablesFromTest, invocation);
+                    break;
+
+                case "MockInheritance":
+                    mockInheritanceFromTest = true;
                     break;
             }
         }
@@ -428,7 +434,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             Mockables: mockablesFromTest,
             DependenciesInterfaceName: $"IAuto{oldName}Dependencies",
             DependenciesFieldName: "_dependencies",
-            DependenciesParameterName: "dependencies"
+            DependenciesParameterName: "dependencies",
+            MockInheritance: mockInheritanceFromTest
         );
 
         var rewrittenDocument = ApplyRewritesAsync(document, targetClassNode, instructions).GetAwaiter().GetResult();
@@ -495,6 +502,16 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 // 1. Rename class
                 updatedClass = (ClassDeclarationSyntax)gen.WithName(updatedClass, instructions.NewClassName);
 
+                // 1b. If MockInheritance, update base class reference
+                if (instructions.MockInheritance && updatedClass.BaseList != null)
+                {
+                    var baseClassName = $"{instructions.OldClassName}Base_G";
+                    var newBaseList = updatedClass.BaseList.WithTypes(
+                        SyntaxFactory.SeparatedList(new[] { (BaseTypeSyntax)SyntaxFactory.SimpleBaseType(SyntaxFactory.IdentifierName(baseClassName)) })
+                    );
+                    updatedClass = updatedClass.WithBaseList(newBaseList);
+                }
+
                 // 2. Add dependency injection field
                 var fieldDecl = (FieldDeclarationSyntax)
                     gen.FieldDeclaration(
@@ -505,6 +522,21 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     );
                 updatedClass = updatedClass.AddMembers(fieldDecl);
 
+                // 2b. If MockInheritance, add base dependencies field
+                if (instructions.MockInheritance)
+                {
+                    var baseDependenciesFieldName = "_baseDependencies";
+                    var baseDependenciesInterfaceName = $"IAuto{instructions.OldClassName}BaseDependencies";
+                    var baseDependenciesField = (FieldDeclarationSyntax)
+                        gen.FieldDeclaration(
+                            baseDependenciesFieldName,
+                            gen.IdentifierName(baseDependenciesInterfaceName),
+                            Accessibility.Private,
+                            DeclarationModifiers.ReadOnly
+                        );
+                    updatedClass = updatedClass.AddMembers(baseDependenciesField);
+                }
+
                 // 3. Build new members list with transformed constructors and public methods
                 var newMembers = new List<MemberDeclarationSyntax>();
                 var hasExistingCtors = false;
@@ -514,7 +546,9 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     if (member is ConstructorDeclarationSyntax ctor)
                     {
                         hasExistingCtors = true;
-                        var updatedCtor = RenameAndInjectDependencyIntoCtor(ctor, gen, instructions, ref needsCallerMemberName);
+                        var updatedCtor = instructions.MockInheritance
+                            ? RenameAndInjectDependenciesIntoCtor(ctor, gen, instructions)
+                            : RenameAndInjectDependencyIntoCtor(ctor, gen, instructions, ref needsCallerMemberName);
                         newMembers.Add(updatedCtor);
                     }
                     else if (member is MethodDeclarationSyntax method)
@@ -534,10 +568,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     }
                     else if (
                         member is FieldDeclarationSyntax field
-                        && field.Declaration.Variables.Any(v => v.Identifier.Text == instructions.DependenciesFieldName)
+                        && (field.Declaration.Variables.Any(v => v.Identifier.Text == instructions.DependenciesFieldName)
+                            || (instructions.MockInheritance && field.Declaration.Variables.Any(v => v.Identifier.Text == "_baseDependencies")))
                     )
                     {
-                        // Keep the dependency field we added
+                        // Keep the dependency fields we added
                         newMembers.Add(field);
                     }
                     else
@@ -550,7 +585,9 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 // If no constructors exist, create one
                 if (!hasExistingCtors)
                 {
-                    var defaultCtor = CreateDefaultDependencyInjectionConstructor(gen, instructions);
+                    var defaultCtor = instructions.MockInheritance
+                        ? CreateDefaultDependencyInjectionConstructorWithBase(gen, instructions)
+                        : CreateDefaultDependencyInjectionConstructor(gen, instructions);
                     newMembers.Add(defaultCtor);
                 }
 
@@ -609,6 +646,65 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             var interfaceDecl = BuildDependenciesInterface(generator3, instructions);
             editor3.InsertAfter(finalClass, interfaceDecl);
             changedDoc = editor3.GetChangedDocument();
+        }
+
+        // Phase 3b: Handle MockInheritance - generate base class replacement and dependencies
+        if (instructions.MockInheritance && classNode.BaseList != null && classNode.BaseList.Types.Any())
+        {
+            // Extract which base members are actually used
+            var baseType = instructions.TargetType.BaseType;
+            if (baseType != null && baseType.SpecialType != SpecialType.System_Object)
+            {
+                var usedBaseMembers = ExtractUsedBaseMembers(classNode, instructions.TargetType, await document.GetSemanticModelAsync());
+
+                if (usedBaseMembers.Any())
+                {
+                    var editor3b = await DocumentEditor.CreateAsync(changedDoc);
+                    var generator3b = editor3b.Generator;
+                    var root3b = await changedDoc.GetSyntaxRootAsync();
+
+                    var updatedClass = root3b
+                        ?.DescendantNodes()
+                        .OfType<ClassDeclarationSyntax>()
+                        .FirstOrDefault(c => c.Identifier.Text == instructions.NewClassName);
+
+                    if (updatedClass != null)
+                    {
+                        var baseClassName = $"{instructions.OldClassName}Base_G";
+                        var baseDependenciesInterfaceName = $"IAuto{instructions.OldClassName}BaseDependencies";
+
+                        // Generate the base class replacement
+                        var baseClassDecl = BuildBaseClassReplacement(
+                            generator3b,
+                            instructions.OldClassName,
+                            baseType,
+                            usedBaseMembers,
+                            baseDependenciesInterfaceName,
+                            instructions.DependenciesFieldName
+                        );
+
+                        // Generate the base dependencies interface
+                        var baseDependenciesInterfaceDecl = BuildBaseDependenciesInterface(
+                            generator3b,
+                            instructions.OldClassName,
+                            usedBaseMembers
+                        );
+
+                        // Insert base class and interface before the derived class
+                        editor3b.InsertBefore(updatedClass, baseClassDecl);
+                        editor3b.InsertBefore(updatedClass, baseDependenciesInterfaceDecl);
+
+                        changedDoc = editor3b.GetChangedDocument();
+
+                        // If any base members have CallerMemberName attributes, we'll need the using statement
+                        if (usedBaseMembers.OfType<IMethodSymbol>().Any(m => 
+                            m.Parameters.Any(p => p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute"))))
+                        {
+                            needsCallerMemberName = true;
+                        }
+                    }
+                }
+            }
         }
 
         // Phase 4: Add using for System.Runtime.CompilerServices if needed
@@ -787,6 +883,136 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return newCtor.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
     }
 
+     private ConstructorDeclarationSyntax RenameAndInjectDependenciesIntoCtor(
+        ConstructorDeclarationSyntax ctor,
+        SyntaxGenerator generator,
+        FlexibleTestingInstructions instructions
+    )
+    {
+        // Determine parameter names (avoid conflicts)
+        var depsParamName = instructions.DependenciesParameterName;
+        if (ctor.ParameterList.Parameters.Any(p => p.Identifier.Text == depsParamName))
+        {
+            depsParamName += "2";
+        }
+
+        var baseDepsParamName = "baseDependencies";
+        if (ctor.ParameterList.Parameters.Any(p => p.Identifier.Text == baseDepsParamName))
+        {
+            baseDepsParamName = "baseDependencies2";
+        }
+
+        // Create new parameters for both dependency injections
+        var depsParam = (ParameterSyntax)
+            generator.ParameterDeclaration(depsParamName, generator.IdentifierName(instructions.DependenciesInterfaceName));
+        var baseDepsParam = (ParameterSyntax)
+            generator.ParameterDeclaration(baseDepsParamName, generator.IdentifierName($"IAuto{instructions.OldClassName}BaseDependencies"));
+
+        // Create assignment statements
+        var depsAssignment = (StatementSyntax)
+            generator.ExpressionStatement(
+                generator.AssignmentStatement(
+                    generator.IdentifierName(instructions.DependenciesFieldName),
+                    generator.IdentifierName(depsParamName)
+                )
+            );
+
+        var baseDepsAssignment = (StatementSyntax)
+            generator.ExpressionStatement(
+                generator.AssignmentStatement(
+                    generator.IdentifierName("_baseDependencies"),
+                    generator.IdentifierName(baseDepsParamName)
+                )
+            );
+
+        // Update base() call to pass baseDependencies
+        ConstructorInitializerSyntax? newInitializer = null;
+        if (ctor.Initializer != null && ctor.Initializer.IsKind(SyntaxKind.BaseConstructorInitializer))
+        {
+            var baseArgs = ctor.Initializer.ArgumentList.Arguments.Add(
+                SyntaxFactory.Argument(SyntaxFactory.IdentifierName(baseDepsParamName))
+            );
+            newInitializer = ctor.Initializer.WithArgumentList(ctor.Initializer.ArgumentList.WithArguments(baseArgs));
+        }
+
+        // Build new constructor body
+        BlockSyntax newBody;
+        if (ctor.Body != null)
+        {
+            var existingStatements = ctor.Body.Statements;
+            if (existingStatements.Count > 0)
+            {
+                newBody = SyntaxFactory.Block(new[] { depsAssignment, baseDepsAssignment }.Concat(existingStatements).ToArray());
+            }
+            else
+            {
+                newBody = SyntaxFactory.Block(depsAssignment, baseDepsAssignment);
+            }
+        }
+        else if (ctor.ExpressionBody != null)
+        {
+            var expr = SyntaxFactory.ExpressionStatement((ExpressionSyntax)ctor.ExpressionBody.Expression);
+            newBody = SyntaxFactory.Block(depsAssignment, baseDepsAssignment, expr);
+        }
+        else
+        {
+            newBody = SyntaxFactory.Block(depsAssignment, baseDepsAssignment);
+        }
+
+        // Create new constructor with both dependency parameters
+        var newCtor = ctor.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName))
+            .WithParameterList(ctor.ParameterList.AddParameters(depsParam, baseDepsParam))
+            .WithBody(newBody)
+            .WithExpressionBody(null)
+            .WithSemicolonToken(default);
+
+        if (newInitializer != null)
+        {
+            newCtor = newCtor.WithInitializer(newInitializer);
+        }
+
+        return newCtor;
+    }
+
+    private ConstructorDeclarationSyntax CreateDefaultDependencyInjectionConstructorWithBase(
+        SyntaxGenerator generator,
+        FlexibleTestingInstructions instructions
+    )
+    {
+        var depsParamName = instructions.DependenciesParameterName;
+        var baseDepsParamName = "baseDependencies";
+
+        var depsParam = (ParameterSyntax)
+            generator.ParameterDeclaration(depsParamName, generator.IdentifierName(instructions.DependenciesInterfaceName));
+        var baseDepsParam = (ParameterSyntax)
+            generator.ParameterDeclaration(baseDepsParamName, generator.IdentifierName($"IAuto{instructions.OldClassName}BaseDependencies"));
+
+        var depsAssignment = (StatementSyntax)
+            generator.ExpressionStatement(
+                generator.AssignmentStatement(
+                    generator.IdentifierName(instructions.DependenciesFieldName),
+                    generator.IdentifierName(depsParamName)
+                )
+            );
+
+        var baseDepsAssignment = (StatementSyntax)
+            generator.ExpressionStatement(
+                generator.AssignmentStatement(
+                    generator.IdentifierName("_baseDependencies"),
+                    generator.IdentifierName(baseDepsParamName)
+                )
+            );
+
+        var newCtor = (ConstructorDeclarationSyntax)
+            generator.ConstructorDeclaration(
+                parameters: new[] { depsParam, baseDepsParam },
+                accessibility: Accessibility.Public,
+                statements: new[] { depsAssignment, baseDepsAssignment }
+            );
+
+        return newCtor.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
+    }
+
     private SyntaxNode ReplaceMockablesInNode(
         SyntaxNode node,
         SyntaxGenerator generator,
@@ -920,6 +1146,51 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return null;
     }
 
+    private static List<ISymbol> ExtractUsedBaseMembers(
+        ClassDeclarationSyntax derivedClass,
+        INamedTypeSymbol targetType,
+        SemanticModel semanticModel
+    )
+    {
+        var usedMembers = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var baseType = targetType.BaseType;
+
+        if (baseType == null || baseType.SpecialType == SpecialType.System_Object)
+            return new List<ISymbol>();
+
+        // Get all invocations and member accesses in the derived class
+        var allNodes = derivedClass.DescendantNodes();
+
+        foreach (var node in allNodes)
+        {
+            ISymbol? symbol = null;
+
+            // For method calls: base.OnLoad(), OnPropertyChanged(), etc.
+            if (node is InvocationExpressionSyntax invocation)
+            {
+                symbol = semanticModel.GetSymbolInfo(invocation.Expression).Symbol;
+            }
+            // For member access: base.OnLoad, this.SomeProperty, etc.
+            else if (node is MemberAccessExpressionSyntax memberAccess)
+            {
+                symbol = semanticModel.GetSymbolInfo(memberAccess).Symbol;
+            }
+            // For simple identifiers: OnPropertyChanged, OnLoad (without base.), etc.
+            else if (node is IdentifierNameSyntax identifier && node.Parent is not MemberAccessExpressionSyntax)
+            {
+                symbol = semanticModel.GetSymbolInfo(identifier).Symbol;
+            }
+
+            // Check if symbol belongs to base type
+            if (symbol != null && baseType.GetMembers().Contains(symbol, SymbolEqualityComparer.Default))
+            {
+                usedMembers.Add(symbol);
+            }
+        }
+
+        return usedMembers.ToList();
+    }
+
     private static SyntaxNode BuildDependenciesInterface(SyntaxGenerator generator, FlexibleTestingInstructions instructions)
     {
         var members = new List<SyntaxNode>();
@@ -976,6 +1247,276 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
         var iface = generator.InterfaceDeclaration(
             instructions.DependenciesInterfaceName,
+            accessibility: Accessibility.Public,
+            members: members
+        );
+
+        var comment = SyntaxFactory.Comment("/// <summary>Mock this using NSubstitute</summary>");
+        return ((SyntaxNode)iface).WithLeadingTrivia(SyntaxFactory.TriviaList(comment));
+    }
+
+    private static SyntaxNode BuildBaseClassReplacement(
+        SyntaxGenerator generator,
+        string derivedClassName,
+        INamedTypeSymbol baseType,
+        List<ISymbol> usedMembers,
+        string baseDependenciesInterfaceName,
+        string dependenciesFieldName
+    )
+    {
+        var baseClassName = $"{derivedClassName}Base_G";
+        var baseDependenciesFieldName = "_baseDependencies";
+        var baseDependenciesParamName = "baseDependencies";
+
+        var members = new List<MemberDeclarationSyntax>();
+
+        // Add constructor with base type parameter and base dependencies injection
+        var ctorParams = new List<SyntaxNode>
+        {
+            generator.ParameterDeclaration("someDataObject", generator.IdentifierName(baseType.Constructors.FirstOrDefault()?.Parameters.FirstOrDefault()?.Type.Name ?? "SomeDataObject")),
+            generator.ParameterDeclaration(baseDependenciesParamName, generator.IdentifierName(baseDependenciesInterfaceName))
+        };
+
+        var ctorBody = new List<StatementSyntax>
+        {
+            SyntaxFactory.ParseStatement($"{baseDependenciesFieldName} = {baseDependenciesParamName};")
+        };
+
+        var ctor = (ConstructorDeclarationSyntax)generator.ConstructorDeclaration(
+            baseClassName,
+            parameters: ctorParams,
+            accessibility: Accessibility.Public
+        );
+
+        ctor = ctor.WithBody(SyntaxFactory.Block(ctorBody));
+        members.Add(ctor);
+
+        // Add field for base dependencies
+        var depsField = (FieldDeclarationSyntax)generator.FieldDeclaration(
+            baseDependenciesFieldName,
+            generator.IdentifierName(baseDependenciesInterfaceName),
+            Accessibility.Private,
+            DeclarationModifiers.ReadOnly
+        );
+        members.Add(depsField);
+
+        // Add empty stub implementations for used base members
+        foreach (var member in usedMembers)
+        {
+            if (member is IMethodSymbol method && method.MethodKind != MethodKind.Constructor)
+            {
+                var methodStub = CreateBaseMethodStub(generator, method, baseDependenciesInterfaceName, baseDependenciesFieldName);
+                members.Add(methodStub);
+            }
+            else if (member is IPropertySymbol property)
+            {
+                var propertyStub = CreateBasePropertyStub(generator, property, baseDependenciesInterfaceName, baseDependenciesFieldName);
+                members.Add(propertyStub);
+            }
+        }
+
+        // Create the class
+        var baseClass = (ClassDeclarationSyntax)generator.ClassDeclaration(
+            baseClassName,
+            accessibility: Accessibility.Public,
+            members: members
+        );
+
+        return baseClass;
+    }
+
+    private static MethodDeclarationSyntax CreateBaseMethodStub(
+        SyntaxGenerator generator,
+        IMethodSymbol method,
+        string baseDependenciesInterfaceName,
+        string baseDependenciesFieldName
+    )
+    {
+        var methodName = method.Name;
+        var parameters = method.Parameters.Select(p =>
+        {
+            var paramType = GetTypeNameSyntax(p.Type);
+            var param = (ParameterSyntax)generator.ParameterDeclaration(p.Name, paramType);
+
+            // Add CallerMemberName attribute if present
+            if (p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute"))
+            {
+                param = generator.AddAttributes(param, generator.Attribute("CallerMemberName")) as ParameterSyntax ?? param;
+            }
+
+            // Add default value if parameter has one
+            if (p.HasExplicitDefaultValue)
+            {
+                var defaultValue = p.ExplicitDefaultValue;
+                var defaultExpression = defaultValue == null
+                    ? SyntaxFactory.LiteralExpression(SyntaxKind.NullLiteralExpression)
+                    : (ExpressionSyntax)generator.LiteralExpression(defaultValue);
+                param = param.WithDefault(SyntaxFactory.EqualsValueClause(defaultExpression));
+            }
+
+            return param;
+        }).ToList();
+
+        var returnType = method.ReturnType.SpecialType == SpecialType.System_Void
+            ? SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.VoidKeyword))
+            : GetTypeNameSyntax(method.ReturnType);
+
+        // Build method body that calls base dependencies
+        var body = SyntaxFactory.Block();
+
+        // Determine accessibility: if method is protected, use protected; otherwise public
+        var accessibility = method.DeclaredAccessibility == Accessibility.Protected
+            ? Accessibility.Protected
+            : Accessibility.Public;
+
+        var methodDecl = (MethodDeclarationSyntax)generator.MethodDeclaration(
+            methodName,
+            parameters: parameters,
+            returnType: returnType,
+            accessibility: accessibility,
+            modifiers: DeclarationModifiers.Virtual
+        );
+
+        return methodDecl.WithBody(body);
+    }
+
+    private static TypeSyntax GetTypeNameSyntax(ITypeSymbol type)
+    {
+        TypeSyntax baseSyntax;
+
+        if (type.SpecialType == SpecialType.System_String)
+            baseSyntax = SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.StringKeyword));
+        else if (type.SpecialType == SpecialType.System_Object)
+            baseSyntax = SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.ObjectKeyword));
+        else if (type.SpecialType == SpecialType.System_Void)
+            baseSyntax = SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.VoidKeyword));
+        else if (type.SpecialType == SpecialType.System_Int32)
+            baseSyntax = SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.IntKeyword));
+        else if (type.SpecialType == SpecialType.System_Boolean)
+            baseSyntax = SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.BoolKeyword));
+        else
+        {
+            // For all other types, use ParseTypeName to get proper TypeSyntax
+            var displayName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            baseSyntax = (TypeSyntax)SyntaxFactory.ParseTypeName(displayName);
+        }
+
+        // Check if type is nullable and wrap with NullableTypeSyntax if needed
+        if (type.IsReferenceType && type.NullableAnnotation == NullableAnnotation.Annotated)
+        {
+            return SyntaxFactory.NullableType(baseSyntax);
+        }
+
+        return baseSyntax;
+    }
+
+    private static PropertyDeclarationSyntax CreateBasePropertyStub(
+        SyntaxGenerator generator,
+        IPropertySymbol property,
+        string baseDependenciesInterfaceName,
+        string baseDependenciesFieldName
+    )
+    {
+        var propertyType = GetTypeNameSyntax(property.Type);
+        var accessorList = new List<AccessorDeclarationSyntax>();
+
+        if (property.GetMethod != null)
+        {
+            var getter = SyntaxFactory.AccessorDeclaration(
+                SyntaxKind.GetAccessorDeclaration,
+                body: SyntaxFactory.Block()
+            );
+            accessorList.Add(getter);
+        }
+
+        if (property.SetMethod != null)
+        {
+            var setter = SyntaxFactory.AccessorDeclaration(
+                SyntaxKind.SetAccessorDeclaration,
+                body: SyntaxFactory.Block()
+            );
+            accessorList.Add(setter);
+        }
+
+        var propDecl = (PropertyDeclarationSyntax)generator.PropertyDeclaration(
+            property.Name,
+            propertyType,
+            accessibility: Accessibility.Public,
+            modifiers: DeclarationModifiers.Virtual
+        );
+
+        if (accessorList.Count > 0)
+        {
+            propDecl = propDecl.WithAccessorList(SyntaxFactory.AccessorList(SyntaxFactory.List(accessorList)));
+        }
+
+        return propDecl;
+    }
+
+    private static SyntaxNode BuildBaseDependenciesInterface(
+        SyntaxGenerator generator,
+        string derivedClassName,
+        List<ISymbol> usedMembers
+    )
+    {
+        var interfaceName = $"IAuto{derivedClassName}BaseDependencies";
+        var members = new List<SyntaxNode>();
+
+        foreach (var member in usedMembers)
+        {
+            if (member is IMethodSymbol method && method.MethodKind != MethodKind.Constructor)
+            {
+                var parameters = method.Parameters.Select(p =>
+                {
+                    var paramType = GetTypeNameSyntax(p.Type);
+                    var param = (ParameterSyntax)generator.ParameterDeclaration(p.Name, paramType);
+
+                    // Add CallerMemberName attribute if present
+                    if (p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute"))
+                    {
+                        param = generator.AddAttributes(param, generator.Attribute("CallerMemberName")) as ParameterSyntax ?? param;
+                    }
+
+                    // Add default value if parameter has one
+                    if (p.HasExplicitDefaultValue)
+                    {
+                        var defaultValue = p.ExplicitDefaultValue;
+                        var defaultExpression = defaultValue == null
+                            ? SyntaxFactory.LiteralExpression(SyntaxKind.NullLiteralExpression)
+                            : (ExpressionSyntax)generator.LiteralExpression(defaultValue);
+                        param = param.WithDefault(SyntaxFactory.EqualsValueClause(defaultExpression));
+                    }
+
+                    return param;
+                }).ToList();
+
+                var returnType = method.ReturnType.SpecialType == SpecialType.System_Void
+                    ? SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.VoidKeyword))
+                    : GetTypeNameSyntax(method.ReturnType);
+
+                var methodDecl = generator.MethodDeclaration(
+                    method.Name,
+                    parameters: parameters,
+                    returnType: returnType,
+                    accessibility: Accessibility.Public
+                );
+                members.Add(methodDecl);
+            }
+            else if (member is IPropertySymbol property)
+            {
+                var propertyType = GetTypeNameSyntax(property.Type);
+                var propDecl = generator.PropertyDeclaration(
+                    property.Name,
+                    propertyType,
+                    accessibility: Accessibility.Public,
+                    getAccessorStatements: null
+                );
+                members.Add(propDecl);
+            }
+        }
+
+        var iface = generator.InterfaceDeclaration(
+            interfaceName,
             accessibility: Accessibility.Public,
             members: members
         );

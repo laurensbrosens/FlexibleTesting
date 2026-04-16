@@ -13,9 +13,10 @@ public class UserViewModelTests
         var data = new SomeDataObject();
         var deps = Substitute.For<IAutoUserViewModelDependencies>();
         deps.Now.Returns(() => DateTime.Now);
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
 
         // Act
-        var vm = new UserViewModel_G(data, deps);
+        var vm = new UserViewModel_G(data, deps, baseDeps);
 
         // Assert
         Assert.That(vm.Name, Is.EqualTo("Default"));
@@ -29,9 +30,10 @@ public class UserViewModelTests
         var deps = Substitute.For<IAutoUserViewModelDependencies>();
         var expectedDate = new DateTime(2026, 4, 15);
         deps.Now.Returns(() => expectedDate);
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
 
         // Act
-        var vm = new UserViewModel_G(data, deps);
+        var vm = new UserViewModel_G(data, deps, baseDeps);
 
         // Assert
         Assert.That(vm.DateTime, Is.EqualTo(expectedDate));
@@ -44,7 +46,8 @@ public class UserViewModelTests
         var data = new SomeDataObject();
         var deps = Substitute.For<IAutoUserViewModelDependencies>();
         deps.Now.Returns(() => DateTime.Now);
-        var vm = new UserViewModel_G(data, deps);
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+        var vm = new UserViewModel_G(data, deps, baseDeps);
 
         // Act
         vm.Name = "Changed Name";
@@ -60,7 +63,8 @@ public class UserViewModelTests
         var data = new SomeDataObject();
         var deps = Substitute.For<IAutoUserViewModelDependencies>();
         deps.Now.Returns(() => DateTime.Now);
-        var vm = new UserViewModel_G(data, deps);
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+        var vm = new UserViewModel_G(data, deps, baseDeps);
 
         // Act
         vm.SomePrivateMethod();
