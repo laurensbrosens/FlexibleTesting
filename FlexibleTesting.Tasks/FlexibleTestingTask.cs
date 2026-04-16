@@ -17,11 +17,6 @@ namespace FlexibleTesting.Tasks;
 public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 {
     /// <summary>
-    /// Will be resolved automatically, file path to the test project .csproj file (e.g., ..\TestProject\TestProject.csproj)
-    /// </summary>
-    private string _projectFilePath = string.Empty;
-
-    /// <summary>
     /// Will be filled with LegacyProject source files using LegacyProjectPath
     /// </summary>
     private ITaskItem[] _legacySourceFiles = Array.Empty<ITaskItem>();
@@ -59,13 +54,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     /// </summary>
     public string DefineConstants { get; set; } = string.Empty;
 
-    private string TestProjectName =>
-        string.IsNullOrWhiteSpace(_projectFilePath) ? "<unknown>" : Path.GetFileNameWithoutExtension(_projectFilePath);
+    private string TestProjectName => Path.GetFileNameWithoutExtension(BuildEngine.ProjectFileOfTaskNode);
 
-    private string TestProjectDisplay =>
-        string.IsNullOrWhiteSpace(_projectFilePath) ? "<unknown project>" : $"{TestProjectName} ({_projectFilePath})";
+    private string TestProjectDisplay => $"{TestProjectName} ({BuildEngine.ProjectFileOfTaskNode})";
 
-    private string? TestProjectDirectory => string.IsNullOrWhiteSpace(_projectFilePath) ? null : Path.GetDirectoryName(_projectFilePath);
+    private string? TestProjectDirectory => Path.GetDirectoryName(BuildEngine.ProjectFileOfTaskNode);
 
     private string LegacyDisplay
     {
@@ -89,48 +82,58 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         {
             //System.Diagnostics.Debugger.Launch();
 
-            // Use provided ProjectFilePath or get from MSBuild context
-            if (string.IsNullOrWhiteSpace(_projectFilePath))
+            // Use provided OutputPath or default to ../Generated directory
+            OutputPath = string.IsNullOrWhiteSpace(OutputPath)
+                ? Path.GetFullPath(OutputPath!)
+                : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(BuildEngine.ProjectFileOfTaskNode)!, "Generated"));
+
+            LogMessage($"FlexibleTestingTask running for {TestProjectDisplay}. OutputPath={OutputPath}");
+
+            // Discover legacy project source files
+            var discoveredFiles = DiscoverSourceFilesFromProject(LegacyProjectPath);
+            _legacySourceFiles = [.. discoveredFiles.Select(f => new TaskItem(f))];
+            LogMessage($"Discovered {_legacySourceFiles.Length} source files from legacy project: {LegacyProjectPath}");
+
+            // If LegacyAssemblyName not provided, derive it from project filename
+            if (string.IsNullOrWhiteSpace(_legacyAssemblyName))
             {
-                _projectFilePath = BuildEngine.ProjectFileOfTaskNode;
-                if (string.IsNullOrWhiteSpace(_projectFilePath))
-                {
-                    Log.LogError("ProjectFilePath parameter must be provided or task must run within an MSBuild project context.");
-                    return false;
-                }
-            }
-
-            // Use provided OutputPath or default to obj/Generated directory
-            if (string.IsNullOrWhiteSpace(OutputPath))
-            {
-                var projectDir = Path.GetDirectoryName(_projectFilePath);
-                OutputPath = Path.Combine(projectDir ?? ".", "Generated");
-            }
-
-            OutputPath = Path.GetFullPath(OutputPath);
-
-            Log.LogMessage(MessageImportance.High, $"FlexibleTestingTask running for {TestProjectDisplay}. OutputPath={OutputPath}");
-
-            // If LegacyProjectPath is provided, discover source files from it
-            if (!string.IsNullOrWhiteSpace(LegacyProjectPath) && _legacySourceFiles.Length == 0)
-            {
-                var discoveredFiles = DiscoverSourceFilesFromProject(LegacyProjectPath);
-                _legacySourceFiles = discoveredFiles.Select(f => new Microsoft.Build.Utilities.TaskItem(f) as ITaskItem).ToArray();
-                Log.LogMessage(
-                    MessageImportance.High,
-                    $"Discovered {_legacySourceFiles.Length} source files from legacy project: {LegacyProjectPath}"
-                );
-
-                // If LegacyAssemblyName not provided, derive it from project filename
-                if (string.IsNullOrWhiteSpace(_legacyAssemblyName))
-                {
-                    _legacyAssemblyName = Path.GetFileNameWithoutExtension(LegacyProjectPath);
-                    Log.LogMessage(MessageImportance.High, $"Derived LegacyAssemblyName from project path: {_legacyAssemblyName}");
-                }
+                _legacyAssemblyName = Path.GetFileNameWithoutExtension(LegacyProjectPath);
+                LogMessage($"Derived LegacyAssemblyName from project path: {_legacyAssemblyName}");
             }
 
             // Log all input parameters
-            LogInputs();
+            LogMessage($"Input Parameters:");
+            LogMessage($"  ProjectFilePath: {BuildEngine.ProjectFileOfTaskNode}");
+            LogMessage($"  OutputPath: {OutputPath}");
+            LogMessage($"  SourceFiles count: {SourceFiles.Length}");
+            foreach (var sourceFile in SourceFiles)
+            {
+                LogMessage($"    - {GetItemFullPath(sourceFile)}");
+            }
+            LogMessage($"  References count: {References.Length}");
+            foreach (var reference in References)
+            {
+                LogMessage($"    - {reference.GetMetadata("FullPath") ?? reference.ItemSpec}");
+            }
+            LogMessage($"  LegacySourceFiles count: {_legacySourceFiles.Length}");
+            foreach (var legacySourceFile in _legacySourceFiles)
+            {
+                LogMessage($"    - {GetItemFullPath(legacySourceFile)}");
+            }
+            LogMessage($"  LegacyAssemblyName: {_legacyAssemblyName}");
+            LogMessage($"  DefineConstants: {DefineConstants}");
+
+            if (_legacySourceFiles.Length > 0)
+            {
+                LogMessage($"Legacy sources provided: {LegacyDisplay}");
+            }
+            else
+            {
+                Log.LogMessage(
+                    MessageImportance.Low,
+                    $"No LegacySourceFiles provided. If you target types from '{_legacyAssemblyName}', DeclaringSyntaxReferences will not be available."
+                );
+            }
 
             var parseOptions = CreateParseOptions(DefineConstants);
             var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
@@ -155,7 +158,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 name: TestProjectName,
                 assemblyName: TestProjectName,
                 language: LanguageNames.CSharp,
-                filePath: _projectFilePath,
+                filePath: BuildEngine.ProjectFileOfTaskNode,
                 compilationOptions: compilationOptions,
                 parseOptions: parseOptions,
                 metadataReferences: metadataReferencesForTestProject
@@ -262,42 +265,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         {
             Log.LogErrorFromException(ex, showStackTrace: true);
             return false;
-        }
-    }
-
-    private void LogInputs()
-    {
-        Log.LogMessage(MessageImportance.High, $"Input Parameters:");
-        Log.LogMessage(MessageImportance.High, $"  ProjectFilePath: {_projectFilePath}");
-        Log.LogMessage(MessageImportance.High, $"  OutputPath: {OutputPath}");
-        Log.LogMessage(MessageImportance.High, $"  SourceFiles count: {SourceFiles.Length}");
-        foreach (var sourceFile in SourceFiles)
-        {
-            Log.LogMessage(MessageImportance.Low, $"    - {GetItemFullPath(sourceFile)}");
-        }
-        Log.LogMessage(MessageImportance.High, $"  References count: {References.Length}");
-        foreach (var reference in References)
-        {
-            Log.LogMessage(MessageImportance.Low, $"    - {reference.GetMetadata("FullPath") ?? reference.ItemSpec}");
-        }
-        Log.LogMessage(MessageImportance.High, $"  LegacySourceFiles count: {_legacySourceFiles.Length}");
-        foreach (var legacySourceFile in _legacySourceFiles)
-        {
-            Log.LogMessage(MessageImportance.Low, $"    - {GetItemFullPath(legacySourceFile)}");
-        }
-        Log.LogMessage(MessageImportance.High, $"  LegacyAssemblyName: {_legacyAssemblyName}");
-        Log.LogMessage(MessageImportance.High, $"  DefineConstants: {DefineConstants}");
-
-        if (_legacySourceFiles.Length > 0)
-        {
-            Log.LogMessage(MessageImportance.High, $"Legacy sources provided: {LegacyDisplay}");
-        }
-        else
-        {
-            Log.LogMessage(
-                MessageImportance.Low,
-                $"No LegacySourceFiles provided. If you target types from '{_legacyAssemblyName}', DeclaringSyntaxReferences will not be available."
-            );
         }
     }
 
@@ -506,8 +473,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         var fullPath = Path.Combine(OutputPath, fileName);
 
         File.WriteAllText(fullPath, result, Encoding.UTF8);
-        Log.LogMessage(
-            MessageImportance.High,
+        LogMessage(
             $"[{TestProjectDisplay}] Generated {fullPath} from legacy type {targetTypeInLegacy.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}"
         );
     }
@@ -1813,7 +1779,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
             if (!File.Exists(filePath))
             {
-                Log.LogMessage(MessageImportance.Low, $"[{projectDisplayForLogging}] Reference path does not exist (skipped): {filePath}");
+                LogMessage($"[{projectDisplayForLogging}] Reference path does not exist (skipped): {filePath}");
                 continue;
             }
 
@@ -2115,7 +2081,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         var objDir = Path.Combine(legacyProjectDir, "obj");
         if (!Directory.Exists(objDir))
         {
-            Log.LogMessage(MessageImportance.Low, $"obj directory not found for legacy project: {objDir}");
+            LogMessage($"obj directory not found for legacy project: {objDir}");
             return null;
         }
 
@@ -2127,7 +2093,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             {
                 // Use the first one found (typically there should be only one)
                 var selectedFile = globalUsingsFiles[0];
-                Log.LogMessage(MessageImportance.High, $"Found GlobalUsings file: {selectedFile}");
+                LogMessage($"Found GlobalUsings file: {selectedFile}");
                 return selectedFile;
             }
         }
@@ -2136,7 +2102,12 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             Log.LogWarning($"Error searching for GlobalUsings file in {objDir}: {ex.Message}");
         }
 
-        Log.LogMessage(MessageImportance.Low, "GlobalUsings file not found for legacy project.");
+        LogMessage("GlobalUsings file not found for legacy project.");
         return null;
+    }
+
+    private void LogMessage(string message, MessageImportance importance = MessageImportance.High)
+    {
+        Log.LogMessage(importance, message);
     }
 }
