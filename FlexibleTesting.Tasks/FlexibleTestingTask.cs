@@ -410,6 +410,52 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             return;
         }
 
+        // For each mockable method, also add it to methodsToMakePublic so it becomes public
+        foreach (var mockable in mockablesFromTest.Where(m => m.Kind == MockableKind.Method))
+        {
+            // Find the method in the target type from the test compilation
+            var mockableMethod = targetTypeFromTest.GetMembers(mockable.MemberName)
+                .OfType<IMethodSymbol>()
+                .FirstOrDefault(m => m.ContainingType?.Name == mockable.ContainingTypeSimpleName);
+
+            // If not found in the target type, search in base types
+            if (mockableMethod == null)
+            {
+                var currentType = targetTypeFromTest.BaseType;
+                while (currentType != null && currentType.SpecialType != SpecialType.System_Object)
+                {
+                    mockableMethod = currentType.GetMembers(mockable.MemberName)
+                        .OfType<IMethodSymbol>()
+                        .FirstOrDefault(m => m.ContainingType?.Name == mockable.ContainingTypeSimpleName);
+
+                    if (mockableMethod != null)
+                        break;
+
+                    currentType = currentType.BaseType;
+                }
+            }
+
+            if (mockableMethod != null)
+            {
+                methodsToMakePublicFromTest.Add(mockableMethod);
+
+                // Also add the base definition if this is an override
+                var originalDef = mockableMethod.OriginalDefinition;
+                if (mockableMethod.IsOverride && originalDef.OverriddenMethod != null)
+                {
+                    var baseMethod = mockableMethod.OverriddenMethod;
+                    while (baseMethod?.IsOverride == true && baseMethod.OverriddenMethod != null)
+                    {
+                        baseMethod = baseMethod.OverriddenMethod;
+                    }
+                    if (baseMethod != null && !methodsToMakePublicFromTest.Contains(baseMethod, SymbolEqualityComparer.Default))
+                    {
+                        methodsToMakePublicFromTest.Add(baseMethod);
+                    }
+                }
+            }
+        }
+
         // IMPORTANT: symbols from testCompilation won't match symbols from legacyCompilation,
         // so map methods-to-make-public by signature.
         var methodsToMakePublicInLegacy = MapMethodsToLegacy(targetTypeInLegacy, methodsToMakePublicFromTest);
@@ -561,7 +607,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
                         if (symbol != null && instructions.MethodsToMakePublic.Any(m => SymbolsMatch(m, symbol)))
                         {
-                            updatedMethod = (MethodDeclarationSyntax)gen.WithAccessibility(method, Accessibility.Public);
+                            updatedMethod = MakeMethodPublic((MethodDeclarationSyntax)updatedMethod);
                         }
 
                         newMembers.Add(updatedMethod);
@@ -680,7 +726,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                             baseType,
                             usedBaseMembers,
                             baseDependenciesInterfaceName,
-                            instructions.DependenciesFieldName
+                            instructions.DependenciesFieldName,
+                            instructions.MethodsToMakePublic
                         );
 
                         // Generate the base dependencies interface
@@ -1111,6 +1158,29 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return false;
     }
 
+    private static MethodDeclarationSyntax MakeMethodPublic(MethodDeclarationSyntax method)
+    {
+        // Remove existing accessibility modifiers (protected, private, internal, etc.)
+        var modifiers = method.Modifiers
+            .Where(m => m.Kind() is not
+                SyntaxKind.ProtectedKeyword and
+                not SyntaxKind.PrivateKeyword and
+                not SyntaxKind.InternalKeyword and
+                not SyntaxKind.PublicKeyword)
+            .ToList();
+
+        // Remove the override modifier as we're converting this to a public method
+        // that shouldn't override the base (the base will also be made public)
+        modifiers = modifiers
+            .Where(m => m.Kind() != SyntaxKind.OverrideKeyword)
+            .ToList();
+
+        // Add public modifier at the beginning
+        modifiers.Insert(0, SyntaxFactory.Token(SyntaxKind.PublicKeyword));
+
+        return method.WithModifiers(SyntaxFactory.TokenList(modifiers));
+    }
+
     private static string GetMethodSignature(IMethodSymbol symbol)
     {
         var paramTypes = string.Join(",", symbol.Parameters.Select(p => p.Type.ToDisplayString()));
@@ -1261,7 +1331,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         INamedTypeSymbol baseType,
         List<ISymbol> usedMembers,
         string baseDependenciesInterfaceName,
-        string dependenciesFieldName
+        string dependenciesFieldName,
+        IReadOnlyList<IMethodSymbol> methodsToMakePublic
     )
     {
         var baseClassName = $"{derivedClassName}Base_G";
@@ -1305,7 +1376,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         {
             if (member is IMethodSymbol method && method.MethodKind != MethodKind.Constructor)
             {
-                var methodStub = CreateBaseMethodStub(generator, method, baseDependenciesInterfaceName, baseDependenciesFieldName);
+                var shouldBePublic = methodsToMakePublic.Any(m => SymbolsMatch(m, method));
+                var methodStub = CreateBaseMethodStub(generator, method, baseDependenciesInterfaceName, baseDependenciesFieldName, shouldBePublic);
                 members.Add(methodStub);
             }
             else if (member is IPropertySymbol property)
@@ -1329,7 +1401,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         SyntaxGenerator generator,
         IMethodSymbol method,
         string baseDependenciesInterfaceName,
-        string baseDependenciesFieldName
+        string baseDependenciesFieldName,
+        bool shouldBePublic = false
     )
     {
         var methodName = method.Name;
@@ -1362,12 +1435,45 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             : GetTypeNameSyntax(method.ReturnType);
 
         // Build method body that calls base dependencies
-        var body = SyntaxFactory.Block();
+        // Generate: _baseDependencies.MethodName(param1, param2, ...)
+        var parameterNames = method.Parameters.Select(p => p.Name).ToList();
+        var invocationArgs = parameterNames.Select(name => SyntaxFactory.Argument(SyntaxFactory.IdentifierName(name))).ToArray();
 
-        // Determine accessibility: if method is protected, use protected; otherwise public
-        var accessibility = method.DeclaredAccessibility == Accessibility.Protected
-            ? Accessibility.Protected
-            : Accessibility.Public;
+        StatementSyntax bodyStatement;
+        if (method.ReturnType.SpecialType == SpecialType.System_Void)
+        {
+            // For void methods: _baseDependencies.MethodName(args);
+            bodyStatement = SyntaxFactory.ExpressionStatement(
+                SyntaxFactory.InvocationExpression(
+                    SyntaxFactory.MemberAccessExpression(
+                        SyntaxKind.SimpleMemberAccessExpression,
+                        SyntaxFactory.IdentifierName(baseDependenciesFieldName),
+                        SyntaxFactory.IdentifierName(methodName)
+                    ),
+                    SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(invocationArgs))
+                )
+            );
+        }
+        else
+        {
+            // For non-void methods: return _baseDependencies.MethodName(args);
+            bodyStatement = SyntaxFactory.ReturnStatement(
+                SyntaxFactory.InvocationExpression(
+                    SyntaxFactory.MemberAccessExpression(
+                        SyntaxKind.SimpleMemberAccessExpression,
+                        SyntaxFactory.IdentifierName(baseDependenciesFieldName),
+                        SyntaxFactory.IdentifierName(methodName)
+                    ),
+                    SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(invocationArgs))
+                )
+            );
+        }
+
+        var body = SyntaxFactory.Block(bodyStatement);
+
+        // Determine accessibility: use public if shouldBePublic; otherwise if method is protected, use protected; otherwise public
+        var accessibility = shouldBePublic ? Accessibility.Public : 
+                           (method.DeclaredAccessibility == Accessibility.Protected ? Accessibility.Protected : Accessibility.Public);
 
         var methodDecl = (MethodDeclarationSyntax)generator.MethodDeclaration(
             methodName,
@@ -1534,7 +1640,27 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         {
             var match = legacyMethods.FirstOrDefault(ml => SymbolsMatch(ml, mb));
             if (match != null)
+            {
                 result.Add(match);
+            }
+            else
+            {
+                // If not found in the target type, try to find it in the base type
+                // This handles virtual methods that need to be made public
+                var baseType = legacyType.BaseType;
+                while (baseType != null && baseType.SpecialType != SpecialType.System_Object)
+                {
+                    var baseMatch = baseType.GetMembers()
+                        .OfType<IMethodSymbol>()
+                        .FirstOrDefault(ml => SymbolsMatch(ml, mb));
+                    if (baseMatch != null)
+                    {
+                        result.Add(baseMatch);
+                        break;
+                    }
+                    baseType = baseType.BaseType;
+                }
+            }
         }
 
         return result;
