@@ -16,51 +16,70 @@ namespace FlexibleTesting.Tasks;
 
 public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 {
-    public string? ProjectFilePath { get; set; }
+    /// <summary>
+    /// Will be resolved automatically, file path to the test project .csproj file (e.g., ..\TestProject\TestProject.csproj)
+    /// </summary>
+    private string _projectFilePath = string.Empty;
 
+    /// <summary>
+    /// Will be filled with LegacyProject source files using LegacyProjectPath
+    /// </summary>
+    private ITaskItem[] _legacySourceFiles = Array.Empty<ITaskItem>();
+
+    /// <summary>
+    /// Assembly name of legacy project, derived from LegacyProjectPath, only used for logging
+    /// </summary>
+    public string _legacyAssemblyName = string.Empty;
+
+    /// <summary>
+    /// Default output path is e.g., ..\TestProject\Generated
+    /// </summary>
     public string? OutputPath { get; set; }
 
+    /// <summary>
+    /// Should be filled with @(Compile), contains all TestProject source files that will be compiled
+    /// </summary>
     [Required]
     public ITaskItem[] SourceFiles { get; set; } = Array.Empty<ITaskItem>();
 
+    /// <summary>
+    /// Should be filled with @(ReferencePath), List with all references to DLL's and .csproj files needed for TestProject compilation
+    /// </summary>
     [Required]
     public ITaskItem[] References { get; set; } = Array.Empty<ITaskItem>();
 
-    // Legacy project sources (e.g. LegacyCodeProject)
-    public ITaskItem[] LegacySourceFiles { get; set; } = Array.Empty<ITaskItem>();
-
-    // Path to legacy project file (e.g., ..\LegacyCodeProject\LegacyCodeProject.csproj)
-    // When provided, source files will be discovered from this project instead of using LegacySourceFiles
+    /// <summary>
+    /// Should be filled with path to LegacyProejct (e.g., ..\LegacyCodeProject\LegacyCodeProject.csproj), DLL's do not work!
+    /// </summary>
+    [Required]
     public string LegacyProjectPath { get; set; } = string.Empty;
 
-    // Assembly name of legacy project (used to filter out its DLL from references for the legacy source compilation)
-    // If not provided and LegacyProjectPath is set, will be derived from the project filename
-    public string LegacyAssemblyName { get; set; } = string.Empty;
-
-    // Optional, but helps parsing when you use #if in code
+    /// <summary>
+    /// Sould be filled with @(DefineConstants), required in order to compile #if directives and source generator output
+    /// </summary>
     public string DefineConstants { get; set; } = string.Empty;
 
     private string TestProjectName =>
-        string.IsNullOrWhiteSpace(ProjectFilePath) ? "<unknown>" : Path.GetFileNameWithoutExtension(ProjectFilePath);
+        string.IsNullOrWhiteSpace(_projectFilePath) ? "<unknown>" : Path.GetFileNameWithoutExtension(_projectFilePath);
 
     private string TestProjectDisplay =>
-        string.IsNullOrWhiteSpace(ProjectFilePath) ? "<unknown project>" : $"{TestProjectName} ({ProjectFilePath})";
+        string.IsNullOrWhiteSpace(_projectFilePath) ? "<unknown project>" : $"{TestProjectName} ({_projectFilePath})";
 
-    private string? TestProjectDirectory => string.IsNullOrWhiteSpace(ProjectFilePath) ? null : Path.GetDirectoryName(ProjectFilePath);
+    private string? TestProjectDirectory => string.IsNullOrWhiteSpace(_projectFilePath) ? null : Path.GetDirectoryName(_projectFilePath);
 
     private string LegacyDisplay
     {
         get
         {
-            var legacyName = string.IsNullOrWhiteSpace(LegacyAssemblyName) ? "<unknown legacy assembly>" : LegacyAssemblyName;
+            var legacyName = string.IsNullOrWhiteSpace(_legacyAssemblyName) ? "<unknown legacy assembly>" : _legacyAssemblyName;
 
             var legacyRoot = TryGetCommonRootDirectory(
-                LegacySourceFiles.Select(i => GetItemFullPath(i)).Where(p => !string.IsNullOrWhiteSpace(p))!
+                _legacySourceFiles.Select(i => GetItemFullPath(i)).Where(p => !string.IsNullOrWhiteSpace(p))!
             );
 
             return legacyRoot != null
                 ? $"{legacyName} (sources under {legacyRoot})"
-                : $"{legacyName} (LegacySourceFiles={LegacySourceFiles.Length})";
+                : $"{legacyName} (LegacySourceFiles={_legacySourceFiles.Length})";
         }
     }
 
@@ -68,13 +87,13 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     {
         try
         {
-            // System.Diagnostics.Debugger.Launch();
+            //System.Diagnostics.Debugger.Launch();
 
             // Use provided ProjectFilePath or get from MSBuild context
-            if (string.IsNullOrWhiteSpace(ProjectFilePath))
+            if (string.IsNullOrWhiteSpace(_projectFilePath))
             {
-                ProjectFilePath = BuildEngine?.ProjectFileOfTaskNode;
-                if (string.IsNullOrWhiteSpace(ProjectFilePath))
+                _projectFilePath = BuildEngine?.ProjectFileOfTaskNode;
+                if (string.IsNullOrWhiteSpace(_projectFilePath))
                 {
                     Log.LogError("ProjectFilePath parameter must be provided or task must run within an MSBuild project context.");
                     return false;
@@ -84,7 +103,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             // Use provided OutputPath or default to obj/Generated directory
             if (string.IsNullOrWhiteSpace(OutputPath))
             {
-                var projectDir = Path.GetDirectoryName(ProjectFilePath);
+                var projectDir = Path.GetDirectoryName(_projectFilePath);
                 OutputPath = Path.Combine(projectDir ?? ".", "Generated");
             }
 
@@ -93,24 +112,26 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             Log.LogMessage(MessageImportance.High, $"FlexibleTestingTask running for {TestProjectDisplay}. OutputPath={OutputPath}");
 
             // If LegacyProjectPath is provided, discover source files from it
-            if (!string.IsNullOrWhiteSpace(LegacyProjectPath) && LegacySourceFiles.Length == 0)
+            if (!string.IsNullOrWhiteSpace(LegacyProjectPath) && _legacySourceFiles.Length == 0)
             {
                 var discoveredFiles = DiscoverSourceFilesFromProject(LegacyProjectPath);
-                LegacySourceFiles = discoveredFiles.Select(f => 
-                    new Microsoft.Build.Utilities.TaskItem(f) as ITaskItem).ToArray();
-                Log.LogMessage(MessageImportance.High, $"Discovered {LegacySourceFiles.Length} source files from legacy project: {LegacyProjectPath}");
+                _legacySourceFiles = discoveredFiles.Select(f => new Microsoft.Build.Utilities.TaskItem(f) as ITaskItem).ToArray();
+                Log.LogMessage(
+                    MessageImportance.High,
+                    $"Discovered {_legacySourceFiles.Length} source files from legacy project: {LegacyProjectPath}"
+                );
 
                 // If LegacyAssemblyName not provided, derive it from project filename
-                if (string.IsNullOrWhiteSpace(LegacyAssemblyName))
+                if (string.IsNullOrWhiteSpace(_legacyAssemblyName))
                 {
-                    LegacyAssemblyName = Path.GetFileNameWithoutExtension(LegacyProjectPath);
-                    Log.LogMessage(MessageImportance.High, $"Derived LegacyAssemblyName from project path: {LegacyAssemblyName}");
+                    _legacyAssemblyName = Path.GetFileNameWithoutExtension(LegacyProjectPath);
+                    Log.LogMessage(MessageImportance.High, $"Derived LegacyAssemblyName from project path: {_legacyAssemblyName}");
                 }
             }
 
             // Log all input parameters
             Log.LogMessage(MessageImportance.High, $"Input Parameters:");
-            Log.LogMessage(MessageImportance.High, $"  ProjectFilePath: {ProjectFilePath}");
+            Log.LogMessage(MessageImportance.High, $"  ProjectFilePath: {_projectFilePath}");
             Log.LogMessage(MessageImportance.High, $"  OutputPath: {OutputPath}");
             Log.LogMessage(MessageImportance.High, $"  SourceFiles count: {SourceFiles.Length}");
             foreach (var sourceFile in SourceFiles)
@@ -122,15 +143,15 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             {
                 Log.LogMessage(MessageImportance.Low, $"    - {reference.GetMetadata("FullPath") ?? reference.ItemSpec}");
             }
-            Log.LogMessage(MessageImportance.High, $"  LegacySourceFiles count: {LegacySourceFiles.Length}");
-            foreach (var legacySourceFile in LegacySourceFiles)
+            Log.LogMessage(MessageImportance.High, $"  LegacySourceFiles count: {_legacySourceFiles.Length}");
+            foreach (var legacySourceFile in _legacySourceFiles)
             {
                 Log.LogMessage(MessageImportance.Low, $"    - {GetItemFullPath(legacySourceFile)}");
             }
-            Log.LogMessage(MessageImportance.High, $"  LegacyAssemblyName: {LegacyAssemblyName}");
+            Log.LogMessage(MessageImportance.High, $"  LegacyAssemblyName: {_legacyAssemblyName}");
             Log.LogMessage(MessageImportance.High, $"  DefineConstants: {DefineConstants}");
 
-            if (LegacySourceFiles.Length > 0)
+            if (_legacySourceFiles.Length > 0)
             {
                 Log.LogMessage(MessageImportance.High, $"Legacy sources provided: {LegacyDisplay}");
             }
@@ -138,7 +159,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             {
                 Log.LogMessage(
                     MessageImportance.Low,
-                    $"No LegacySourceFiles provided. If you target types from '{LegacyAssemblyName}', DeclaringSyntaxReferences will not be available."
+                    $"No LegacySourceFiles provided. If you target types from '{_legacyAssemblyName}', DeclaringSyntaxReferences will not be available."
                 );
             }
 
@@ -153,7 +174,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
             var metadataReferencesForLegacySourceCompilation = CreateMetadataReferences(
                 References,
-                excludeAssemblyName: string.IsNullOrWhiteSpace(LegacyAssemblyName) ? null : LegacyAssemblyName,
+                excludeAssemblyName: string.IsNullOrWhiteSpace(_legacyAssemblyName) ? null : _legacyAssemblyName,
                 projectDisplayForLogging: $"legacy source compilation for {LegacyDisplay}"
             );
 
@@ -165,7 +186,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 name: TestProjectName,
                 assemblyName: TestProjectName,
                 language: LanguageNames.CSharp,
-                filePath: ProjectFilePath,
+                filePath: _projectFilePath,
                 compilationOptions: compilationOptions,
                 parseOptions: parseOptions,
                 metadataReferences: metadataReferencesForTestProject
@@ -185,9 +206,10 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             Compilation? legacyCompilation = null;
             string? legacyProjectNameForLogging = null;
 
-            if (LegacySourceFiles.Length > 0)
+            if (_legacySourceFiles.Length > 0)
             {
-                legacyProjectNameForLogging = $"LegacySources_{(string.IsNullOrWhiteSpace(LegacyAssemblyName) ? "Unknown" : LegacyAssemblyName)}";
+                legacyProjectNameForLogging =
+                    $"LegacySources_{(string.IsNullOrWhiteSpace(_legacyAssemblyName) ? "Unknown" : _legacyAssemblyName)}";
                 var legacyProjectId = ProjectId.CreateNewId();
                 var legacyProjectInfo = ProjectInfo.Create(
                     legacyProjectId,
@@ -202,13 +224,18 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 );
 
                 solution = solution.AddProject(legacyProjectInfo);
-                solution = AddDocuments(solution, legacyProjectId, LegacySourceFiles, expectedRootDirectoryForWarning: null, Log);
+                solution = AddDocuments(solution, legacyProjectId, _legacySourceFiles, expectedRootDirectoryForWarning: null, Log);
 
                 if (globalUsingsPath != null && File.Exists(globalUsingsPath))
                 {
                     var usingsContent = File.ReadAllText(globalUsingsPath);
                     var legacyUsingsDocId = DocumentId.CreateNewId(legacyProjectId);
-                    solution = solution.AddDocument(legacyUsingsDocId, Path.GetFileName(globalUsingsPath), usingsContent, filePath: globalUsingsPath);
+                    solution = solution.AddDocument(
+                        legacyUsingsDocId,
+                        Path.GetFileName(globalUsingsPath),
+                        usingsContent,
+                        filePath: globalUsingsPath
+                    );
                 }
 
                 var legacyProject = solution.GetProject(legacyProjectId);
@@ -216,13 +243,16 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             }
 
             var testProject = solution.GetProject(testProjectId);
-            if (testProject == null) return false;
+            if (testProject == null)
+                return false;
 
             var testCompilation = testProject.GetCompilationAsync().GetAwaiter().GetResult();
-            if (testCompilation == null) return false;
+            if (testCompilation == null)
+                return false;
 
             var generatorInstructionsAttribute = testCompilation.GetTypeByMetadataName("FlexibleTesting.GeneratorInstructionsAttribute");
-            if (generatorInstructionsAttribute == null) return true;
+            if (generatorInstructionsAttribute == null)
+                return true;
 
             var attributedInstructionClassCount = 0;
             foreach (var syntaxTree in testCompilation.SyntaxTrees)
@@ -234,12 +264,25 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 foreach (var classNode in classes)
                 {
                     var symbol = semanticModel.GetDeclaredSymbol(classNode);
-                    if (symbol == null) continue;
+                    if (symbol == null)
+                        continue;
 
-                    if (symbol.GetAttributes().Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, generatorInstructionsAttribute)))
+                    if (
+                        symbol
+                            .GetAttributes()
+                            .Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, generatorInstructionsAttribute))
+                    )
                     {
                         attributedInstructionClassCount++;
-                        GenerateForFlexibleTesting(solution, testCompilation, legacyCompilation, semanticModel, classNode, symbol, legacyProjectNameForLogging);
+                        GenerateForFlexibleTesting(
+                            solution,
+                            testCompilation,
+                            legacyCompilation,
+                            semanticModel,
+                            classNode,
+                            symbol,
+                            legacyProjectNameForLogging
+                        );
                     }
                 }
             }
@@ -872,9 +915,9 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         if (symbol == null)
             return null;
 
-        var fullQualifiedName = symbol.ContainingType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            var fullQualifiedName = symbol.ContainingType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
-        return mockables.FirstOrDefault(m => m.MemberName == symbol.Name && m.ContainingTypeFullName == fullQualifiedName);
+            return mockables.FirstOrDefault(m => m.MemberName == symbol.Name && m.ContainingTypeFullName == fullQualifiedName);
     }
 
     private static SyntaxNode BuildDependenciesInterface(SyntaxGenerator generator, FlexibleTestingInstructions instructions)
@@ -1034,10 +1077,12 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             var normalizedPath = Path.GetFullPath(file);
             var relativePath = GetRelativePath(projectDirectory, normalizedPath);
 
-            if (relativePath.StartsWith("bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-                relativePath.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-                relativePath.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-                relativePath.Equals("obj", StringComparison.OrdinalIgnoreCase))
+            if (
+                relativePath.StartsWith("bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || relativePath.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || relativePath.Equals("bin", StringComparison.OrdinalIgnoreCase)
+                || relativePath.Equals("obj", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 continue;
             }
@@ -1434,8 +1479,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             if (root.Usings.Count > 0)
             {
                 // Create a new compilation unit with only the using directives
-                var newRoot = SyntaxFactory.CompilationUnit()
-                    .WithUsings(root.Usings);
+                var newRoot = SyntaxFactory.CompilationUnit().WithUsings(root.Usings);
 
                 var newTree = CSharpSyntaxTree.Create(newRoot);
                 return newTree;

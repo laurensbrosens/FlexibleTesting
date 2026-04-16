@@ -37,7 +37,12 @@
 			   TaskFactory="TaskHostFactory" Condition="'$(MSBuildRuntimeType)' != 'Full'" />
 
 	<Target Name="GenerateFlexibleTesting" BeforeTargets="CoreCompile" AfterTargets="ResolveReferences;ResolveProjectReferences">
-		<FlexibleTestingTask SourceFiles="@(Compile)" References="@(ReferencePath)" LegacyProjectPath="..\LegacyCodeProject\LegacyCodeProject.csproj" />
+		<FlexibleTestingTask SourceFiles="@(Compile)" References="@(ReferencePath)" DefineConstants="@(DefineConstants)" LegacyProjectPath="..\LegacyCodeProject\LegacyCodeProject.csproj"
+                         OutputPath="$(MSBuildProjectDirectory)\Generated" />
+    <ItemGroup>
+      <Compile Include="$(MSBuildProjectDirectory)\Generated\**\*.cs" />
+      <FileWrites Include="$(MSBuildProjectDirectory)\Generated\**\*.cs" />
+    </ItemGroup>
 	</Target>
 
   <ItemGroup>
