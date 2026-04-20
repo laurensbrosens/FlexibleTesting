@@ -1,11 +1,9 @@
 using Microsoft.Build.Framework;
-using Microsoft.Build.Utilities;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.MSBuild;
-using Microsoft.CodeAnalysis.Text;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -22,11 +20,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     /// Will be filled with LegacyProject source files using LegacyProjectPath
     /// </summary>
     private ITaskItem[] _legacySourceFiles = Array.Empty<ITaskItem>();
-
-    /// <summary>
-    /// Assembly name of legacy project, derived from LegacyProjectPath, only used for logging
-    /// </summary>
-    public string _legacyAssemblyName = string.Empty;
 
     /// <summary>
     /// Default output path is e.g., ..\TestProject\Generated
@@ -51,32 +44,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     [Required]
     public string LegacyProjectPath { get; set; } = string.Empty;
 
-    /// <summary>
-    /// Sould be filled with @(DefineConstants), required in order to compile #if directives and source generator output
-    /// </summary>
-    public string DefineConstants { get; set; } = string.Empty;
-
     private string TestProjectName => Path.GetFileNameWithoutExtension(BuildEngine.ProjectFileOfTaskNode);
 
     private string TestProjectDisplay => $"{TestProjectName} ({BuildEngine.ProjectFileOfTaskNode})";
 
     private string? TestProjectDirectory => Path.GetDirectoryName(BuildEngine.ProjectFileOfTaskNode);
-
-    private string LegacyDisplay
-    {
-        get
-        {
-            var legacyName = string.IsNullOrWhiteSpace(_legacyAssemblyName) ? "<unknown legacy assembly>" : _legacyAssemblyName;
-
-            var legacyRoot = TryGetCommonRootDirectory(
-                _legacySourceFiles.Select(i => GetItemFullPath(i)).Where(p => !string.IsNullOrWhiteSpace(p))!
-            );
-
-            return legacyRoot != null
-                ? $"{legacyName} (sources under {legacyRoot})"
-                : $"{legacyName} (LegacySourceFiles={_legacySourceFiles.Length})";
-        }
-    }
 
     public override bool Execute()
     {
@@ -89,219 +61,28 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 ? Path.GetFullPath(OutputPath!)
                 : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(BuildEngine.ProjectFileOfTaskNode)!, "Generated"));
 
-            LogMessage($"FlexibleTestingTask running for {TestProjectDisplay}. OutputPath={OutputPath}");
-
-            // Discover legacy project source files
-            var discoveredFiles = DiscoverSourceFilesFromProject(LegacyProjectPath);
-            _legacySourceFiles = [.. discoveredFiles.Select(f => new TaskItem(f))];
-            LogMessage($"Discovered {_legacySourceFiles.Length} source files from legacy project: {LegacyProjectPath}");
-
-            // If LegacyAssemblyName not provided, derive it from project filename
-            if (string.IsNullOrWhiteSpace(_legacyAssemblyName))
-            {
-                _legacyAssemblyName = Path.GetFileNameWithoutExtension(LegacyProjectPath);
-                LogMessage($"Derived LegacyAssemblyName from project path: {_legacyAssemblyName}");
-            }
-
-            // Log all input parameters
-            LogMessage($"Input Parameters:");
-            LogMessage($"  ProjectFilePath: {BuildEngine.ProjectFileOfTaskNode}");
-            LogMessage($"  OutputPath: {OutputPath}");
-            LogMessage($"  SourceFiles count: {SourceFiles.Length}");
-            foreach (var sourceFile in SourceFiles)
-            {
-                LogMessage($"    - {GetItemFullPath(sourceFile)}");
-            }
-            LogMessage($"  References count: {References.Length}");
-            foreach (var reference in References)
-            {
-                LogMessage($"    - {reference.GetMetadata("FullPath") ?? reference.ItemSpec}");
-            }
-            LogMessage($"  LegacySourceFiles count: {_legacySourceFiles.Length}");
-            foreach (var legacySourceFile in _legacySourceFiles)
-            {
-                LogMessage($"    - {GetItemFullPath(legacySourceFile)}");
-            }
-            LogMessage($"  LegacyAssemblyName: {_legacyAssemblyName}");
-            LogMessage($"  DefineConstants: {DefineConstants}");
-
-            if (_legacySourceFiles.Length > 0)
-            {
-                LogMessage($"Legacy sources provided: {LegacyDisplay}");
-            }
-            else
-            {
-                Log.LogMessage(
-                    MessageImportance.Low,
-                    $"No LegacySourceFiles provided. If you target types from '{_legacyAssemblyName}', DeclaringSyntaxReferences will not be available."
-                );
-            }
-
-            var parseOptions = CreateParseOptions(DefineConstants);
-            var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
-
-            var metadataReferencesForTestProject = CreateMetadataReferences(
-                References,
-                excludeAssemblyName: null,
-                projectDisplayForLogging: TestProjectDisplay
-            );
-
-            var metadataReferencesForLegacySourceCompilation = CreateMetadataReferences(
-                References,
-                excludeAssemblyName: string.IsNullOrWhiteSpace(_legacyAssemblyName) ? null : _legacyAssemblyName,
-                projectDisplayForLogging: $"legacy source compilation for {LegacyDisplay}"
-            );
-
-            /*
-            // 1. Haal de bestanden op via MSBuild Evaluatie (voor het legacy project)
-            var projectCollection = new ProjectCollection();
-            var loadedProject = projectCollection.LoadProject(LegacyProjectPath);
-
-            var sourceFiles = loadedProject.GetItems("Compile")
-                .Select(i => i.GetMetadataValue("FullPath"))
-                .Where(f => !f.EndsWith(".g.cs")) // Optioneel: negeer generated
-                .ToList();
-
-            // 2. Maak de ProjectInfo aan zoals je al deed
-            var legacyProjectId = ProjectId.CreateNewId();
-            var legacyProjectInfo = ProjectInfo.Create(
-                legacyProjectId,
-                VersionStamp.Default,
-                name: "LegacyProject",
-                assemblyName: "LegacyProject",
-                language: LanguageNames.CSharp,
-                filePath: LegacyProjectPath
-            );
-
-            solution = solution.AddProject(legacyProjectInfo);
-
-            // 3. Voeg de bestanden toe aan de solution
-            foreach (var file in sourceFiles)
-            {
-                var docId = DocumentId.CreateNewId(legacyProjectId);
-                var sourceText = SourceText.From(File.ReadAllText(file));
-                solution = solution.AddDocument(docId, Path.GetFileName(file), sourceText, filePath: file);
-            }
-
-            // Belangrijk: unload het project uit het geheugen
-            projectCollection.UnloadProject(loadedProject);
-            */
-
-
-
-
-            // var workspace = new AdhocWorkspace();
-
-
-            /*
-            var testProjectId = ProjectId.CreateNewId();
-            var testProjectInfo = ProjectInfo.Create(
-                testProjectId,
-                VersionStamp.Create(),
-                name: TestProjectName,
-                assemblyName: TestProjectName,
-                language: LanguageNames.CSharp,
-                filePath: BuildEngine.ProjectFileOfTaskNode,
-                compilationOptions: compilationOptions,
-                parseOptions: parseOptions,
-                metadataReferences: metadataReferencesForTestProject
-            );*/
             var properties = new Dictionary<string, string>
             {
-                // Core design-time build properties
+                ["DesignTimeBuild"] = "true",
+                ["BuildingInsideVisualStudio"] = "true",
+                ["SkipCompilerExecution"] = "true",
+                ["BuildProjectReferences"] = "false",
+                ["ProvideCommandLineArgs"] = "true",
                 ["FlexibleTestingTaskRunning"] = "true",
             };
             using var msBuildWorkspace = MSBuildWorkspace.Create(properties);
             msBuildWorkspace.SkipUnrecognizedProjects = true;
             var solution = msBuildWorkspace.OpenSolutionAsync("E:\\Workspace\\Projects\\FlexibleTesting\\FlexibleTesting.slnx").Result;
-            var legacyProject = solution.Projects.FirstOrDefault(p => p.Name == _legacyAssemblyName);
+            var legacyProject = solution.Projects.FirstOrDefault(p => p.Name == Path.GetFileNameWithoutExtension(LegacyProjectPath));
             var legacyCompilation = legacyProject.GetCompilationAsync().Result;
             var testProject = solution.Projects.FirstOrDefault(p => p.FilePath == BuildEngine.ProjectFileOfTaskNode);
             var testCompilation = testProject.GetCompilationAsync().Result;
 
-            //var roslynProject = msBuildWorkspace.OpenProjectAsync(BuildEngine.ProjectFileOfTaskNode).Result;
-            //roslynProject.GetCompilationAsync
-            // Optioneel: negeer fouten als het project niet 100% valideert
-            // (handig bij legacy projecten)
-
-
-            // 3. Open het project (dit duurt even, want MSBuild evalueert nu alles)
-            //var roslynProject = msBuildWorkspace.OpenProjectAsync(BuildEngine.ProjectFileOfTaskNode).Result;
-            //BuildWorkspace.
-
-            // 4. Voeg het project toe aan je bestaande AdhocWorkspace
-            // We gebruiken ProjectInfo om de complete definitie over te zetten
-            //var newSolution = targetWorkspace.CurrentSolution.AddProject(roslynProject.ProjectInfo);
-            //workspace.
-
-            //var solution = myAdhocWorkspace.CurrentSolution.AddProject(project.ProjectInfo);
-
-            // How do I add the msBuildWorkspace project to my existing AdhocWorkspace?
-            //var testProjectId = roslynProject.Id;
-
-
-
-            //var solution = workspace.CurrentSolution.AddProject(testProjectInfo);
-            /*solution = AddDocuments(solution, testProjectId, SourceFiles, expectedRootDirectoryForWarning: TestProjectDirectory, Log);
-
-            var globalUsingsPath = TryGetGlobalUsingsFile();
-            if (globalUsingsPath != null && File.Exists(globalUsingsPath))
-            {
-                var usingsContent = File.ReadAllText(globalUsingsPath);
-                var usingsDocId = DocumentId.CreateNewId(testProjectId);
-                solution = solution.AddDocument(usingsDocId, Path.GetFileName(globalUsingsPath), usingsContent, filePath: globalUsingsPath);
-            }
-
-            Compilation? legacyCompilation = null;*/
-            string? legacyProjectNameForLogging = null;
-
-            if (_legacySourceFiles.Length > 0)
-            {
-                legacyProjectNameForLogging =
-                    $"LegacySources_{(string.IsNullOrWhiteSpace(_legacyAssemblyName) ? "Unknown" : _legacyAssemblyName)}";
-                var legacyProjectId = ProjectId.CreateNewId();
-                var legacyProjectInfo = ProjectInfo.Create(
-                    legacyProjectId,
-                    VersionStamp.Create(),
-                    name: legacyProjectNameForLogging,
-                    assemblyName: legacyProjectNameForLogging,
-                    language: LanguageNames.CSharp,
-                    filePath: null,
-                    compilationOptions: compilationOptions,
-                    parseOptions: parseOptions,
-                    metadataReferences: metadataReferencesForLegacySourceCompilation
-                );
-
-                solution = solution.AddProject(legacyProjectInfo);
-                solution = AddDocuments(solution, legacyProjectId, _legacySourceFiles, expectedRootDirectoryForWarning: null, Log);
-                /*
-                if (globalUsingsPath != null && File.Exists(globalUsingsPath))
-                {
-                    var usingsContent = File.ReadAllText(globalUsingsPath);
-                    var legacyUsingsDocId = DocumentId.CreateNewId(legacyProjectId);
-                    solution = solution.AddDocument(
-                        legacyUsingsDocId,
-                        Path.GetFileName(globalUsingsPath),
-                        usingsContent,
-                        filePath: globalUsingsPath
-                    );
-                }*/
-
-                //var legacyProject = solution.GetProject(legacyProjectId);
-                //legacyCompilation = legacyProject?.GetCompilationAsync().GetAwaiter().GetResult();
-            }
-
-            //var testProject = solution.GetProject(testProjectId);
-            /*if (testProject == null)
-                return false;
-
-            var testCompilation = testProject.GetCompilationAsync().GetAwaiter().GetResult();
-            if (testCompilation == null)
-                return false;
-            */
             var generatorInstructionsAttribute = testCompilation.GetTypeByMetadataName("FlexibleTesting.GeneratorInstructionsAttribute");
             if (generatorInstructionsAttribute == null)
+            {
                 return true;
+            }
 
             var attributedInstructionClassCount = 0;
             foreach (var syntaxTree in testCompilation.SyntaxTrees)
@@ -323,20 +104,12 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     )
                     {
                         attributedInstructionClassCount++;
-                        GenerateForFlexibleTesting(
-                            solution,
-                            testCompilation,
-                            legacyCompilation,
-                            semanticModel,
-                            classNode,
-                            symbol,
-                            legacyProjectNameForLogging
-                        );
+                        GenerateForFlexibleTesting(solution, testCompilation, legacyCompilation, semanticModel, classNode, symbol);
                     }
                 }
             }
 
-            return !Log.HasLoggedErrors;
+            return true;
         }
         catch (Exception ex)
         {
@@ -363,17 +136,13 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         Compilation? legacyCompilation,
         SemanticModel semanticModelB,
         ClassDeclarationSyntax classNode,
-        INamedTypeSymbol builderInstructionsSymbol,
-        string? legacyProjectNameForLogging
+        INamedTypeSymbol builderInstructionsSymbol
     )
     {
         var configureMethod = classNode.Members.OfType<MethodDeclarationSyntax>().FirstOrDefault(m => m.Identifier.Text == "Configure");
 
         if (configureMethod?.Body == null)
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Configure() method not found (or has no body) in instruction class '{builderInstructionsSymbol.ToDisplayString()}'."
-            );
             return;
         }
 
@@ -411,19 +180,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
         if (targetTypeFromTest == null || targetTypeFromTest.TypeKind == TypeKind.Error)
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Overwrites.ForClass<TClass>() did not resolve a valid target type "
-                    + $"in instruction class '{builderInstructionsSymbol.ToDisplayString()}'."
-            );
             return;
         }
 
         if (legacyCompilation == null)
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Legacy compilation not available. Pass LegacySourceFiles so we can access DeclaringSyntaxReferences for types from {LegacyDisplay}. "
-                    + $"Target type requested: {targetTypeFromTest.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}"
-            );
             return;
         }
 
@@ -433,29 +194,17 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
         if (targetTypeInLegacy == null)
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Could not find target type '{targetMetadataName}' in legacy source compilation ({LegacyDisplay}). "
-                    + $"(legacy project name in workspace: {legacyProjectNameForLogging ?? "<unknown>"})"
-            );
             return;
         }
 
         var typeSyntaxRef = targetTypeInLegacy.DeclaringSyntaxReferences.FirstOrDefault();
         if (typeSyntaxRef == null)
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Target type '{targetTypeInLegacy.ToDisplayString()}' was found in legacy compilation, "
-                    + $"but still has no DeclaringSyntaxReferences. Ensure LegacySourceFiles includes the defining .cs file(s). "
-                    + $"Legacy: {LegacyDisplay}"
-            );
             return;
         }
 
         if (typeSyntaxRef.GetSyntax() is not ClassDeclarationSyntax targetClassNode)
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Declaring syntax for '{targetTypeInLegacy.ToDisplayString()}' was not a class declaration."
-            );
             return;
         }
 
@@ -517,9 +266,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         var document = solution.GetDocument(targetClassNode.SyntaxTree);
         if (document == null)
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Could not find Document for target class '{targetTypeInLegacy.ToDisplayString()}' in the solution."
-            );
             return;
         }
 
@@ -550,9 +296,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         var fullPath = Path.Combine(OutputPath, fileName);
 
         File.WriteAllText(fullPath, result, Encoding.UTF8);
-        LogMessage(
-            $"[{TestProjectDisplay}] Generated {fullPath} from legacy type {targetTypeInLegacy.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}"
-        );
     }
 
     private async Task<Document> ApplyRewritesAsync(
@@ -567,7 +310,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
         if (semanticModel == null)
         {
-            Log.LogError($"[{TestProjectDisplay}] Could not get semantic model for target class.");
             return document;
         }
 
@@ -1723,170 +1465,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return result;
     }
 
-    private static Solution AddDocuments(
-        Solution solution,
-        ProjectId projectId,
-        ITaskItem[] items,
-        string? expectedRootDirectoryForWarning,
-        TaskLoggingHelper log
-    )
-    {
-        foreach (var item in items)
-        {
-            var filePath = GetItemFullPath(item);
-            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
-                continue;
-
-            if (!string.IsNullOrWhiteSpace(expectedRootDirectoryForWarning))
-            {
-                var full = Path.GetFullPath(filePath);
-                var root = Path.GetFullPath(expectedRootDirectoryForWarning);
-
-                if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-                {
-                    log.LogMessage(
-                        MessageImportance.Low,
-                        $"[FlexibleTestingTask] Note: source file is outside the test project directory: {full}"
-                    );
-                }
-            }
-
-            var documentId = DocumentId.CreateNewId(projectId);
-            var documentInfo = DocumentInfo.Create(
-                documentId,
-                name: Path.GetFileName(filePath),
-                loader: TextLoader.From(
-                    TextAndVersion.Create(SourceText.From(File.ReadAllText(filePath), Encoding.UTF8), VersionStamp.Create())
-                ),
-                filePath: filePath
-            );
-
-            solution = solution.AddDocument(documentInfo);
-        }
-
-        return solution;
-    }
-
-    private List<string> DiscoverSourceFilesFromProject(string projectPath)
-    {
-        var result = new List<string>();
-
-        // Normalize the project path
-        if (!Path.IsPathRooted(projectPath))
-        {
-            if (!string.IsNullOrWhiteSpace(TestProjectDirectory))
-            {
-                projectPath = Path.Combine(TestProjectDirectory, projectPath);
-            }
-        }
-
-        projectPath = Path.GetFullPath(projectPath);
-
-        // Get the directory containing the project file
-        var projectDirectory = Path.GetDirectoryName(projectPath) ?? string.Empty;
-
-        if (!Directory.Exists(projectDirectory))
-        {
-            Log.LogWarning($"[{TestProjectDisplay}] Legacy project directory does not exist: {projectDirectory}");
-            return result;
-        }
-
-        // Find all .cs files, excluding bin, obj, and generated files (.g.cs)
-        var searchPattern = "*.cs";
-        var csFiles = Directory.GetFiles(projectDirectory, searchPattern, SearchOption.AllDirectories);
-
-        foreach (var file in csFiles)
-        {
-            // Exclude bin and obj directories
-            var normalizedPath = Path.GetFullPath(file);
-            var relativePath = GetRelativePath(projectDirectory, normalizedPath);
-
-            if (
-                relativePath.StartsWith("bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-                || relativePath.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-                || relativePath.Equals("bin", StringComparison.OrdinalIgnoreCase)
-                || relativePath.Equals("obj", StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                continue;
-            }
-
-            // Exclude generated files (.g.cs)
-            if (file.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            result.Add(normalizedPath);
-        }
-
-        return result;
-    }
-
-    private static string GetRelativePath(string basePath, string fullPath)
-    {
-        // Normalize paths to use consistent separators
-        basePath = Path.GetFullPath(basePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        fullPath = Path.GetFullPath(fullPath);
-
-        if (fullPath.StartsWith(basePath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-        {
-            return fullPath.Substring(basePath.Length + 1);
-        }
-
-        return fullPath;
-    }
-
-    private List<MetadataReference> CreateMetadataReferences(
-        ITaskItem[] references,
-        string? excludeAssemblyName,
-        string projectDisplayForLogging
-    )
-    {
-        var list = new List<MetadataReference>();
-
-        foreach (var reference in references)
-        {
-            var filePath = reference.GetMetadata("FullPath");
-            if (string.IsNullOrWhiteSpace(filePath))
-                filePath = reference.ItemSpec;
-
-            if (string.IsNullOrWhiteSpace(filePath))
-                continue;
-
-            if (!File.Exists(filePath))
-            {
-                LogMessage($"[{projectDisplayForLogging}] Reference path does not exist (skipped): {filePath}");
-                continue;
-            }
-
-            if (!string.IsNullOrWhiteSpace(excludeAssemblyName))
-            {
-                var name = Path.GetFileNameWithoutExtension(filePath);
-                if (string.Equals(name, excludeAssemblyName, StringComparison.OrdinalIgnoreCase))
-                    continue;
-            }
-
-            list.Add(MetadataReference.CreateFromFile(filePath));
-        }
-
-        return list;
-    }
-
-    private static CSharpParseOptions CreateParseOptions(string defineConstants)
-    {
-        var symbols = new List<string>();
-
-        if (!string.IsNullOrWhiteSpace(defineConstants))
-        {
-            symbols.AddRange(
-                defineConstants.Split([';', ',', ' '], StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Length > 0)
-            );
-        }
-
-        return new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: symbols);
-    }
-
     private static string GetTypeMetadataName(INamedTypeSymbol symbol)
     {
         symbol = symbol.OriginalDefinition;
@@ -1896,50 +1474,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             typeParts.Push(t.MetadataName);
         var typeName = string.Join("+", typeParts);
         return string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
-    }
-
-    private static string GetItemFullPath(ITaskItem item)
-    {
-        var p = item.GetMetadata("FullPath");
-        if (!string.IsNullOrWhiteSpace(p))
-            return p;
-        return item.ItemSpec;
-    }
-
-    private static string? TryGetCommonRootDirectory(IEnumerable<string> filePaths)
-    {
-        var paths = filePaths.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => Path.GetFullPath(p)).ToList();
-        if (paths.Count == 0)
-            return null;
-        var dirParts = paths
-            .Select(p => (Path.GetDirectoryName(p) ?? "").Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-            .Where(parts => parts.Length > 0)
-            .ToList();
-        if (dirParts.Count == 0)
-            return null;
-        int minLen = dirParts.Min(a => a.Length);
-        int commonLen = 0;
-        for (int i = 0; i < minLen; i++)
-        {
-            var candidate = dirParts[0][i];
-            if (dirParts.All(a => string.Equals(a[i], candidate, StringComparison.OrdinalIgnoreCase)))
-                commonLen++;
-            else
-                break;
-        }
-        if (commonLen == 0)
-            return null;
-        var commonParts = dirParts[0].Take(commonLen);
-        var root = string.Join(Path.DirectorySeparatorChar.ToString(), commonParts);
-        if (Path.IsPathRooted(paths[0]))
-        {
-            var firstDir = Path.GetDirectoryName(paths[0]) ?? "";
-            var rootFull = firstDir;
-            while (!string.IsNullOrEmpty(rootFull) && !rootFull.EndsWith(root, StringComparison.OrdinalIgnoreCase))
-                rootFull = Path.GetDirectoryName(rootFull) ?? "";
-            return string.IsNullOrEmpty(rootFull) ? null : rootFull;
-        }
-        return root;
     }
 
     private void AddToMakePublic(
@@ -1976,7 +1510,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             } != 0
         )
         {
-            Log.LogError($"[{TestProjectDisplay}] Overwrites.Mockable only supports parameterless lambdas: Overwrites.Mockable(() => ...)");
             return;
         }
         ExpressionSyntax? bodyExpr = lambda.Body as ExpressionSyntax;
@@ -1986,9 +1519,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 as ExpressionSyntax;
         if (bodyExpr == null)
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Overwrites.Mockable lambda body must be an expression (or a block with a return expression)."
-            );
             return;
         }
         var symbol = semanticModel.GetSymbolInfo(bodyExpr).Symbol;
@@ -1998,17 +1528,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             symbol = semanticModel.GetSymbolInfo(inv.Expression).Symbol;
         if (symbol is not (IPropertySymbol or IFieldSymbol or IMethodSymbol))
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Overwrites.Mockable could not resolve a property/field/method symbol from: {bodyExpr.WithoutTrivia().ToString()}"
-            );
             return;
         }
         var spec = MockableSpec.TryCreate(symbol);
         if (spec == null)
         {
-            Log.LogError(
-                $"[{TestProjectDisplay}] Overwrites.Mockable does not support the provided expression: {bodyExpr.WithoutTrivia()}"
-            );
             return;
         }
         var baseName = spec.DependencyMemberName;
@@ -2144,47 +1668,5 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 return $"global::System.Func<{args}>";
             }
         }
-    }
-
-    private string? TryGetGlobalUsingsFile()
-    {
-        if (string.IsNullOrWhiteSpace(LegacyProjectPath))
-            return null;
-
-        var legacyProjectDir = Path.GetDirectoryName(LegacyProjectPath);
-        if (string.IsNullOrWhiteSpace(legacyProjectDir))
-            return null;
-
-        var objDir = Path.Combine(legacyProjectDir, "obj");
-        if (!Directory.Exists(objDir))
-        {
-            LogMessage($"obj directory not found for legacy project: {objDir}");
-            return null;
-        }
-
-        // Search for any *.GlobalUsings.g.cs file in the obj directory tree
-        try
-        {
-            var globalUsingsFiles = Directory.GetFiles(objDir, "*.GlobalUsings.g.cs", SearchOption.AllDirectories);
-            if (globalUsingsFiles.Length > 0)
-            {
-                // Use the first one found (typically there should be only one)
-                var selectedFile = globalUsingsFiles[0];
-                LogMessage($"Found GlobalUsings file: {selectedFile}");
-                return selectedFile;
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.LogWarning($"Error searching for GlobalUsings file in {objDir}: {ex.Message}");
-        }
-
-        LogMessage("GlobalUsings file not found for legacy project.");
-        return null;
-    }
-
-    private void LogMessage(string message, MessageImportance importance = MessageImportance.High)
-    {
-        Log.LogMessage(importance, message);
     }
 }
