@@ -9,7 +9,10 @@ public class UserViewModel : BaseViewModel
     {
         Name = "Default";
         DateTime = DateTime.Now; // Test
+        Now = DateTime.Now;
+        DateTime = Now; // Test 2
         _userService = new UserService();
+        DoesThisEvenWork();
         OnPropertyChanged();
     }
     public DateTime Now { get; set; }
@@ -36,6 +39,11 @@ public class UserViewModel : BaseViewModel
         base.OnLoad(sender, e);
         SomePrivateMethod();
         OnPropertyChanged();
+    }
+
+    public void DoesThisEvenWork()
+    {
+        throw new Exception("Bad side effect");
     }
 
     private UserService _userService;

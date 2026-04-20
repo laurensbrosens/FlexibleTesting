@@ -16,7 +16,7 @@ public class Overwrites
     public static void MakePublic<TInterface, TDelegate>(Expression<Func<TInterface, TDelegate>> methodSelector)
         where TDelegate : Delegate { }
 
-    public static void MakePublic<TDelegate>(Expression<Func<TDelegate>> methodSelector)
+    public static void MakePublic<TDelegate>(TDelegate value)
         where TDelegate : Delegate { }
 
     public static void Include<T>()
