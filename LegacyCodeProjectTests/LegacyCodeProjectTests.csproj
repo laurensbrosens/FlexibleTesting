@@ -36,8 +36,8 @@
 	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll" 
 			   TaskFactory="TaskHostFactory" Condition="'$(MSBuildRuntimeType)' != 'Full'" />
 
-	<Target Name="GenerateFlexibleTesting" BeforeTargets="CoreCompile" AfterTargets="ResolveReferences;ResolveProjectReferences" Condition="'$(FlexibleTestingTaskRunning)' != 'true'">
-		<FlexibleTestingTask SourceFiles="@(Compile)" References="@(ReferencePath)" DefineConstants="@(DefineConstants)" LegacyProjectPath="..\LegacyCodeProject\LegacyCodeProject.csproj"
+	<Target Name="GenerateFlexibleTesting" BeforeTargets="CoreCompile" AfterTargets="ResolveReferences;ResolveProjectReferences" Condition="'$(DesignTimeBuild)' != 'true' AND '$(FlexibleTestingTaskRunning)' != 'true'">
+		<FlexibleTestingTask SourceFiles="@(Compile)" References="@(ReferencePath)" LegacyProjectPath="..\LegacyCodeProject\LegacyCodeProject.csproj"
                          OutputPath="$(MSBuildProjectDirectory)\Generated" />
     <ItemGroup>
       <Compile Include="$(MSBuildProjectDirectory)\Generated\**\*.cs" />
