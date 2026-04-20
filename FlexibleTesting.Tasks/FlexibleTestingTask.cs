@@ -4,6 +4,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
+using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
 using System;
 using System.Collections.Generic;
@@ -14,6 +15,7 @@ using System.Threading.Tasks;
 
 namespace FlexibleTesting.Tasks;
 
+// Usefull info about someone who does something similar (he mocks the mocks to make them compile time instead of runtime): https://github.com/dotnet/roslyn/issues/4974
 public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 {
     /// <summary>
@@ -80,7 +82,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     {
         try
         {
-            //System.Diagnostics.Debugger.Launch();
+            System.Diagnostics.Debugger.Launch();
 
             // Use provided OutputPath or default to ../Generated directory
             OutputPath = string.IsNullOrWhiteSpace(OutputPath)
@@ -150,7 +152,48 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 projectDisplayForLogging: $"legacy source compilation for {LegacyDisplay}"
             );
 
-            var workspace = new AdhocWorkspace();
+            /*
+            // 1. Haal de bestanden op via MSBuild Evaluatie (voor het legacy project)
+            var projectCollection = new ProjectCollection();
+            var loadedProject = projectCollection.LoadProject(LegacyProjectPath);
+
+            var sourceFiles = loadedProject.GetItems("Compile")
+                .Select(i => i.GetMetadataValue("FullPath"))
+                .Where(f => !f.EndsWith(".g.cs")) // Optioneel: negeer generated
+                .ToList();
+
+            // 2. Maak de ProjectInfo aan zoals je al deed
+            var legacyProjectId = ProjectId.CreateNewId();
+            var legacyProjectInfo = ProjectInfo.Create(
+                legacyProjectId,
+                VersionStamp.Default,
+                name: "LegacyProject",
+                assemblyName: "LegacyProject",
+                language: LanguageNames.CSharp,
+                filePath: LegacyProjectPath
+            );
+
+            solution = solution.AddProject(legacyProjectInfo);
+
+            // 3. Voeg de bestanden toe aan de solution
+            foreach (var file in sourceFiles)
+            {
+                var docId = DocumentId.CreateNewId(legacyProjectId);
+                var sourceText = SourceText.From(File.ReadAllText(file));
+                solution = solution.AddDocument(docId, Path.GetFileName(file), sourceText, filePath: file);
+            }
+
+            // Belangrijk: unload het project uit het geheugen
+            projectCollection.UnloadProject(loadedProject);
+            */
+
+
+
+
+            // var workspace = new AdhocWorkspace();
+
+
+            /*
             var testProjectId = ProjectId.CreateNewId();
             var testProjectInfo = ProjectInfo.Create(
                 testProjectId,
@@ -162,10 +205,44 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 compilationOptions: compilationOptions,
                 parseOptions: parseOptions,
                 metadataReferences: metadataReferencesForTestProject
-            );
+            );*/
+            var properties = new Dictionary<string, string>
+            {
+                // Core design-time build properties
+                ["FlexibleTestingTaskRunning"] = "true",
+            };
+            using var msBuildWorkspace = MSBuildWorkspace.Create(properties);
+            msBuildWorkspace.SkipUnrecognizedProjects = true;
+            var solution = msBuildWorkspace.OpenSolutionAsync("E:\\Workspace\\Projects\\FlexibleTesting\\FlexibleTesting.slnx").Result;
+            var legacyProject = solution.Projects.FirstOrDefault(p => p.Name == _legacyAssemblyName);
+            var legacyCompilation = legacyProject.GetCompilationAsync().Result;
+            var testProject = solution.Projects.FirstOrDefault(p => p.FilePath == BuildEngine.ProjectFileOfTaskNode);
+            var testCompilation = testProject.GetCompilationAsync().Result;
 
-            var solution = workspace.CurrentSolution.AddProject(testProjectInfo);
-            solution = AddDocuments(solution, testProjectId, SourceFiles, expectedRootDirectoryForWarning: TestProjectDirectory, Log);
+            //var roslynProject = msBuildWorkspace.OpenProjectAsync(BuildEngine.ProjectFileOfTaskNode).Result;
+            //roslynProject.GetCompilationAsync
+            // Optioneel: negeer fouten als het project niet 100% valideert
+            // (handig bij legacy projecten)
+
+
+            // 3. Open het project (dit duurt even, want MSBuild evalueert nu alles)
+            //var roslynProject = msBuildWorkspace.OpenProjectAsync(BuildEngine.ProjectFileOfTaskNode).Result;
+            //BuildWorkspace.
+
+            // 4. Voeg het project toe aan je bestaande AdhocWorkspace
+            // We gebruiken ProjectInfo om de complete definitie over te zetten
+            //var newSolution = targetWorkspace.CurrentSolution.AddProject(roslynProject.ProjectInfo);
+            //workspace.
+
+            //var solution = myAdhocWorkspace.CurrentSolution.AddProject(project.ProjectInfo);
+
+            // How do I add the msBuildWorkspace project to my existing AdhocWorkspace?
+            //var testProjectId = roslynProject.Id;
+
+
+
+            //var solution = workspace.CurrentSolution.AddProject(testProjectInfo);
+            /*solution = AddDocuments(solution, testProjectId, SourceFiles, expectedRootDirectoryForWarning: TestProjectDirectory, Log);
 
             var globalUsingsPath = TryGetGlobalUsingsFile();
             if (globalUsingsPath != null && File.Exists(globalUsingsPath))
@@ -175,7 +252,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 solution = solution.AddDocument(usingsDocId, Path.GetFileName(globalUsingsPath), usingsContent, filePath: globalUsingsPath);
             }
 
-            Compilation? legacyCompilation = null;
+            Compilation? legacyCompilation = null;*/
             string? legacyProjectNameForLogging = null;
 
             if (_legacySourceFiles.Length > 0)
@@ -197,7 +274,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
                 solution = solution.AddProject(legacyProjectInfo);
                 solution = AddDocuments(solution, legacyProjectId, _legacySourceFiles, expectedRootDirectoryForWarning: null, Log);
-
+                /*
                 if (globalUsingsPath != null && File.Exists(globalUsingsPath))
                 {
                     var usingsContent = File.ReadAllText(globalUsingsPath);
@@ -208,20 +285,20 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                         usingsContent,
                         filePath: globalUsingsPath
                     );
-                }
+                }*/
 
-                var legacyProject = solution.GetProject(legacyProjectId);
-                legacyCompilation = legacyProject?.GetCompilationAsync().GetAwaiter().GetResult();
+                //var legacyProject = solution.GetProject(legacyProjectId);
+                //legacyCompilation = legacyProject?.GetCompilationAsync().GetAwaiter().GetResult();
             }
 
-            var testProject = solution.GetProject(testProjectId);
-            if (testProject == null)
+            //var testProject = solution.GetProject(testProjectId);
+            /*if (testProject == null)
                 return false;
 
             var testCompilation = testProject.GetCompilationAsync().GetAwaiter().GetResult();
             if (testCompilation == null)
                 return false;
-
+            */
             var generatorInstructionsAttribute = testCompilation.GetTypeByMetadataName("FlexibleTesting.GeneratorInstructionsAttribute");
             if (generatorInstructionsAttribute == null)
                 return true;
