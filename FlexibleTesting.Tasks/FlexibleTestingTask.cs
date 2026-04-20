@@ -1,3 +1,4 @@
+using FlexibleTestingDomain;
 using Microsoft.Build.Framework;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -65,34 +66,25 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }
     }
 
-    private void FindBuilders(Project legacyProject, Compilation? legacyCompilation, Compilation testCompilation)
+    private void FindBuilders(Project legacyProject, Compilation? legacyComp, Compilation testComp)
     {
-        var generatorInstructionsAttribute = testCompilation.GetTypeByMetadataName("FlexibleTesting.GeneratorInstructionsAttribute");
-        if (generatorInstructionsAttribute == null)
+        var targetSymbol = testComp.GetTypeByMetadataName(typeof(GeneratorInstructionsAttribute).FullName!);
+
+        var builders = testComp.SyntaxTrees.SelectMany(st =>
         {
-            return;
-        }
+            var model = testComp.GetSemanticModel(st);
+            return st.GetRoot()
+                .DescendantNodes()
+                .OfType<ClassDeclarationSyntax>()
+                .Select(node => (node, model, symbol: model.GetDeclaredSymbol(node)))
+                .Where(t =>
+                    t.symbol?.GetAttributes().Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, targetSymbol)) == true
+                );
+        });
 
-        foreach (var tree in testCompilation.SyntaxTrees)
+        foreach (var (node, model, _) in builders)
         {
-            var semanticModel = testCompilation.GetSemanticModel(tree);
-            var root = tree.GetRoot();
-
-            foreach (var classNode in root.DescendantNodes().OfType<ClassDeclarationSyntax>())
-            {
-                if (semanticModel.GetDeclaredSymbol(classNode) is not INamedTypeSymbol symbol)
-                {
-                    continue;
-                }
-
-                foreach (var attribute in symbol.GetAttributes())
-                {
-                    if (SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, generatorInstructionsAttribute))
-                    {
-                        GenerateForFlexibleTesting(legacyProject, testCompilation, legacyCompilation, semanticModel, classNode, symbol);
-                    }
-                }
-            }
+            GenerateForFlexibleTesting(legacyProject, testComp, legacyComp, model, node);
         }
     }
 
@@ -113,11 +105,12 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         Compilation testCompilation,
         Compilation? legacyCompilation,
         SemanticModel semanticModelB,
-        ClassDeclarationSyntax classNode,
-        INamedTypeSymbol builderInstructionsSymbol
+        ClassDeclarationSyntax classNode
     )
     {
-        var configureMethod = classNode.Members.OfType<MethodDeclarationSyntax>().FirstOrDefault(m => m.Identifier.Text == "Configure");
+        var configureMethod = classNode
+            .Members.OfType<MethodDeclarationSyntax>()
+            .FirstOrDefault(m => m.Identifier.ValueText == nameof(IGeneratorInstructions.Configure));
 
         if (configureMethod?.Body == null)
         {
