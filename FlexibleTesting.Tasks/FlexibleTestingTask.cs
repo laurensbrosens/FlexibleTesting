@@ -17,38 +17,15 @@ namespace FlexibleTesting.Tasks;
 public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 {
     /// <summary>
-    /// Will be filled with LegacyProject source files using LegacyProjectPath
-    /// </summary>
-    private ITaskItem[] _legacySourceFiles = Array.Empty<ITaskItem>();
-
-    /// <summary>
     /// Default output path is e.g., ..\TestProject\Generated
     /// </summary>
     public string? OutputPath { get; set; }
-
-    /// <summary>
-    /// Should be filled with @(Compile), contains all TestProject source files that will be compiled
-    /// </summary>
-    [Required]
-    public ITaskItem[] SourceFiles { get; set; } = Array.Empty<ITaskItem>();
-
-    /// <summary>
-    /// Should be filled with @(ReferencePath), List with all references to DLL's and .csproj files needed for TestProject compilation
-    /// </summary>
-    [Required]
-    public ITaskItem[] References { get; set; } = Array.Empty<ITaskItem>();
 
     /// <summary>
     /// Should be filled with path to LegacyProejct (e.g., ..\LegacyCodeProject\LegacyCodeProject.csproj), DLL's do not work!
     /// </summary>
     [Required]
     public string LegacyProjectPath { get; set; } = string.Empty;
-
-    private string TestProjectName => Path.GetFileNameWithoutExtension(BuildEngine.ProjectFileOfTaskNode);
-
-    private string TestProjectDisplay => $"{TestProjectName} ({BuildEngine.ProjectFileOfTaskNode})";
-
-    private string? TestProjectDirectory => Path.GetDirectoryName(BuildEngine.ProjectFileOfTaskNode);
 
     public override bool Execute()
     {
@@ -72,42 +49,12 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             };
             using var msBuildWorkspace = MSBuildWorkspace.Create(properties);
             msBuildWorkspace.SkipUnrecognizedProjects = true;
-            var solution = msBuildWorkspace.OpenSolutionAsync("E:\\Workspace\\Projects\\FlexibleTesting\\FlexibleTesting.slnx").Result;
-            var legacyProject = solution.Projects.FirstOrDefault(p => p.Name == Path.GetFileNameWithoutExtension(LegacyProjectPath));
+            var legacyProject = msBuildWorkspace.OpenProjectAsync(LegacyProjectPath).Result;
             var legacyCompilation = legacyProject.GetCompilationAsync().Result;
-            var testProject = solution.Projects.FirstOrDefault(p => p.FilePath == BuildEngine.ProjectFileOfTaskNode);
+            var testProject = msBuildWorkspace.OpenProjectAsync(BuildEngine.ProjectFileOfTaskNode).Result;
             var testCompilation = testProject.GetCompilationAsync().Result;
 
-            var generatorInstructionsAttribute = testCompilation.GetTypeByMetadataName("FlexibleTesting.GeneratorInstructionsAttribute");
-            if (generatorInstructionsAttribute == null)
-            {
-                return true;
-            }
-
-            var attributedInstructionClassCount = 0;
-            foreach (var syntaxTree in testCompilation.SyntaxTrees)
-            {
-                var semanticModel = testCompilation.GetSemanticModel(syntaxTree);
-                var root = syntaxTree.GetRoot();
-                var classes = root.DescendantNodes().OfType<ClassDeclarationSyntax>();
-
-                foreach (var classNode in classes)
-                {
-                    var symbol = semanticModel.GetDeclaredSymbol(classNode);
-                    if (symbol == null)
-                        continue;
-
-                    if (
-                        symbol
-                            .GetAttributes()
-                            .Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, generatorInstructionsAttribute))
-                    )
-                    {
-                        attributedInstructionClassCount++;
-                        GenerateForFlexibleTesting(solution, testCompilation, legacyCompilation, semanticModel, classNode, symbol);
-                    }
-                }
-            }
+            FindBuilders(legacyProject, legacyCompilation, testCompilation);
 
             return true;
         }
@@ -115,6 +62,37 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         {
             Log.LogErrorFromException(ex, showStackTrace: true);
             return false;
+        }
+    }
+
+    private void FindBuilders(Project legacyProject, Compilation? legacyCompilation, Compilation testCompilation)
+    {
+        var generatorInstructionsAttribute = testCompilation.GetTypeByMetadataName("FlexibleTesting.GeneratorInstructionsAttribute");
+        if (generatorInstructionsAttribute == null)
+        {
+            return;
+        }
+
+        foreach (var tree in testCompilation.SyntaxTrees)
+        {
+            var semanticModel = testCompilation.GetSemanticModel(tree);
+            var root = tree.GetRoot();
+
+            foreach (var classNode in root.DescendantNodes().OfType<ClassDeclarationSyntax>())
+            {
+                if (semanticModel.GetDeclaredSymbol(classNode) is not INamedTypeSymbol symbol)
+                {
+                    continue;
+                }
+
+                foreach (var attribute in symbol.GetAttributes())
+                {
+                    if (SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, generatorInstructionsAttribute))
+                    {
+                        GenerateForFlexibleTesting(legacyProject, testCompilation, legacyCompilation, semanticModel, classNode, symbol);
+                    }
+                }
+            }
         }
     }
 
@@ -131,7 +109,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     );
 
     private void GenerateForFlexibleTesting(
-        Solution solution,
+        Project project,
         Compilation testCompilation,
         Compilation? legacyCompilation,
         SemanticModel semanticModelB,
@@ -263,7 +241,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         var oldName = targetClassNode.Identifier.Text;
         var newName = $"{oldName}_G";
 
-        var document = solution.GetDocument(targetClassNode.SyntaxTree);
+        var document = project.GetDocument(targetClassNode.SyntaxTree);
         if (document == null)
         {
             return;
