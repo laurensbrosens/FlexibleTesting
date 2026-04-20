@@ -1,4 +1,4 @@
-﻿using FlexibleTesting;
+﻿using FlexibleTestingDomain;
 using LegacyCodeProject.Core;
 using LegacyCodeProject.Viewmodels;
 

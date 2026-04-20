@@ -1,7 +1,6 @@
-﻿using System;
-using System.Linq.Expressions;
+﻿using System.Linq.Expressions;
 
-namespace FlexibleTesting;
+namespace FlexibleTestingDomain;
 
 public class Overwrites
 {

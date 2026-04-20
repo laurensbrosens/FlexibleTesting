@@ -1,4 +1,4 @@
-﻿namespace FlexibleTesting;
+﻿namespace FlexibleTestingDomain;
 
 public interface IGeneratorInstructions
 {
