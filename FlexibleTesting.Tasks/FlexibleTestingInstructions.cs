@@ -8,9 +8,9 @@ public class FlexibleTestingInstructions
     public INamedTypeSymbol TargetType { get; set; }
     public string OldClassName { get; set; }
     public string NewClassName { get; set; }
-    
+
     public HashSet<IMethodSymbol> MethodsToMakePublic { get; } = new(SymbolSignatureComparer.Default);
-    
+
     public HashSet<IMethodSymbol> MockableMethods { get; } = new(SymbolSignatureComparer.Default);
     public HashSet<IPropertySymbol> MockableProperties { get; } = new(SymbolSignatureComparer.Default);
     public HashSet<IFieldSymbol> MockableFields { get; } = new(SymbolSignatureComparer.Default);
@@ -29,9 +29,12 @@ public class FlexibleTestingInstructions
     {
         get
         {
-            foreach (var method in MockableMethods) yield return method;
-            foreach (var property in MockableProperties) yield return property;
-            foreach (var @field in MockableFields) yield return @field;
+            foreach (var method in MockableMethods)
+                yield return method;
+            foreach (var property in MockableProperties)
+                yield return property;
+            foreach (var @field in MockableFields)
+                yield return @field;
         }
     }
 }

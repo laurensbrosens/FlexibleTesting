@@ -124,7 +124,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             NewClassName = string.Empty, // Will be set below
             DependenciesInterfaceName = string.Empty, // Will be set below
             DependenciesFieldName = "_dependencies",
-            DependenciesParameterName = "dependencies"
+            DependenciesParameterName = "dependencies",
         };
 
         var overwritesSymbol = builderSemanticModel.Compilation.GetTypeByMetadataName(typeof(Overwrites).FullName!);
@@ -220,7 +220,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }*/
 
         var oldName = targetClassNode.Identifier.Text;
-        
+
         instructions.TargetType = targetTypeInLegacy;
         instructions.OldClassName = oldName;
         instructions.NewClassName = $"{oldName}_G";
@@ -270,7 +270,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
         // 2. Structural Changes (Adding fields, Interfaces, Base Class)
         var editor = new SyntaxEditor(surgicallyTransformedRoot, document.Project.Solution.Workspace);
-        var transformedClassNode = surgicallyTransformedRoot.DescendantNodes()
+        var transformedClassNode = surgicallyTransformedRoot
+            .DescendantNodes()
             .OfType<ClassDeclarationSyntax>()
             .First(c => c.Identifier.Text == instructions.NewClassName);
 
@@ -281,7 +282,13 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         bool baseClassNeedsCallerMemberName = false;
         if (instructions.MockInheritance && classNode.BaseList != null && classNode.BaseList.Types.Any())
         {
-            baseClassNeedsCallerMemberName = AddBaseClassReplacementStructural(editor, transformedClassNode, instructions, generator, semanticModel);
+            baseClassNeedsCallerMemberName = AddBaseClassReplacementStructural(
+                editor,
+                transformedClassNode,
+                instructions,
+                generator,
+                semanticModel
+            );
         }
 
         // 3. Finalize Usings and Simplification
@@ -293,19 +300,26 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }
 
         finalRoot = AddMissingUsings(finalRoot, usingsToAdd, generator);
-        
+
         var rewrittenDocument = document.WithSyntaxRoot(finalRoot);
         return await Simplifier.ReduceAsync(rewrittenDocument);
     }
 
-    private void AddStructuralMembers(SyntaxEditor editor, ClassDeclarationSyntax classNode, FlexibleTestingInstructions instructions, SyntaxGenerator generator, Compilation compilation)
+    private void AddStructuralMembers(
+        SyntaxEditor editor,
+        ClassDeclarationSyntax classNode,
+        FlexibleTestingInstructions instructions,
+        SyntaxGenerator generator,
+        Compilation compilation
+    )
     {
         // 1. Add _dependencies field
         var field = generator.FieldDeclaration(
             instructions.DependenciesFieldName,
             generator.IdentifierName(instructions.DependenciesInterfaceName),
             Accessibility.Private,
-            DeclarationModifiers.ReadOnly);
+            DeclarationModifiers.ReadOnly
+        );
         editor.AddMember(classNode, field);
 
         // 2. Add _baseDependencies field if needed
@@ -315,7 +329,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 "_baseDependencies",
                 generator.IdentifierName($"IAuto{instructions.OldClassName}BaseDependencies"),
                 Accessibility.Private,
-                DeclarationModifiers.ReadOnly);
+                DeclarationModifiers.ReadOnly
+            );
             editor.AddMember(classNode, baseField);
         }
 
@@ -324,32 +339,51 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         editor.InsertAfter(classNode, interfaceDecl);
     }
 
-    private bool AddBaseClassReplacementStructural(SyntaxEditor editor, ClassDeclarationSyntax classNode, FlexibleTestingInstructions instructions, SyntaxGenerator generator, SemanticModel semanticModel)
+    private bool AddBaseClassReplacementStructural(
+        SyntaxEditor editor,
+        ClassDeclarationSyntax classNode,
+        FlexibleTestingInstructions instructions,
+        SyntaxGenerator generator,
+        SemanticModel semanticModel
+    )
     {
         var baseType = instructions.TargetType.BaseType;
-        if (baseType == null || baseType.SpecialType == SpecialType.System_Object) return false;
+        if (baseType == null || baseType.SpecialType == SpecialType.System_Object)
+            return false;
 
         // Note: we use the ORIGINAL classNode to extract used members
         var originalClassNode = (ClassDeclarationSyntax)instructions.TargetType.DeclaringSyntaxReferences[0].GetSyntax();
         var usedBaseMembers = ExtractUsedBaseMembers(originalClassNode, instructions.TargetType, semanticModel);
 
-        if (!usedBaseMembers.Any()) return false;
+        if (!usedBaseMembers.Any())
+            return false;
 
         var baseClassName = $"{instructions.OldClassName}Base_G";
         var baseDepsInterfaceName = $"IAuto{instructions.OldClassName}BaseDependencies";
 
-        var baseClassDecl = BuildBaseClassReplacement(generator, instructions.OldClassName, baseType, usedBaseMembers, baseDepsInterfaceName, instructions.DependenciesFieldName, instructions.MethodsToMakePublic);
+        var baseClassDecl = BuildBaseClassReplacement(
+            generator,
+            instructions.OldClassName,
+            baseType,
+            usedBaseMembers,
+            baseDepsInterfaceName,
+            instructions.DependenciesFieldName,
+            instructions.MethodsToMakePublic
+        );
         var baseInterfaceDecl = BuildBaseDependenciesInterface(generator, instructions.OldClassName, usedBaseMembers);
 
         editor.InsertBefore(classNode, baseClassDecl);
         editor.InsertBefore(classNode, baseInterfaceDecl);
 
-        return usedBaseMembers.OfType<IMethodSymbol>().Any(m => m.Parameters.Any(p => p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute")));
+        return usedBaseMembers
+            .OfType<IMethodSymbol>()
+            .Any(m => m.Parameters.Any(p => p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute")));
     }
 
     private SyntaxNode AddMissingUsings(SyntaxNode root, IEnumerable<string> namespaces, SyntaxGenerator generator)
     {
-        if (root is not CompilationUnitSyntax compilationUnit) return root;
+        if (root is not CompilationUnitSyntax compilationUnit)
+            return root;
 
         var currentUsings = compilationUnit.Usings.Select(u => u.Name?.ToString()).ToHashSet();
         var newUsings = namespaces
@@ -360,7 +394,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return compilationUnit.AddUsings(newUsings);
     }
 
-
     private static string GetMethodSignature(IMethodSymbol methodSymbol)
     {
         var parameterTypes = string.Join(",", methodSymbol.Parameters.Select(parameter => parameter.Type.ToDisplayString()));
@@ -369,7 +402,10 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
     private static string GetMethodSignatureFromSyntax(MethodDeclarationSyntax methodDeclaration)
     {
-        var parameterTypes = string.Join(",", methodDeclaration.ParameterList.Parameters.Select(parameter => parameter.Type?.ToString() ?? string.Empty));
+        var parameterTypes = string.Join(
+            ",",
+            methodDeclaration.ParameterList.Parameters.Select(parameter => parameter.Type?.ToString() ?? string.Empty)
+        );
         return $"{parameterTypes}";
     }
 
@@ -422,8 +458,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return usedMembers.ToList();
     }
 
-
-    private static SyntaxNode BuildDependenciesInterface(SyntaxGenerator generator, FlexibleTestingInstructions instructions, Compilation compilation)
+    private static SyntaxNode BuildDependenciesInterface(
+        SyntaxGenerator generator,
+        FlexibleTestingInstructions instructions,
+        Compilation compilation
+    )
     {
         var members = new List<SyntaxNode>();
 
@@ -435,7 +474,10 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             {
                 var methodParameters = methodSymbol.Parameters.Select(parameterSymbol =>
                 {
-                    var parameterDeclaration = generator.ParameterDeclaration(parameterSymbol.Name, generator.TypeExpression(parameterSymbol.Type));
+                    var parameterDeclaration = generator.ParameterDeclaration(
+                        parameterSymbol.Name,
+                        generator.TypeExpression(parameterSymbol.Type)
+                    );
                     if (parameterSymbol.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute"))
                     {
                         parameterDeclaration = generator.AddAttributes(parameterDeclaration, generator.Attribute("CallerMemberName"));
@@ -443,7 +485,9 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     if (parameterSymbol.HasExplicitDefaultValue)
                     {
                         parameterDeclaration = ((ParameterSyntax)parameterDeclaration).WithDefault(
-                            SyntaxFactory.EqualsValueClause((ExpressionSyntax)generator.LiteralExpression(parameterSymbol.ExplicitDefaultValue))
+                            SyntaxFactory.EqualsValueClause(
+                                (ExpressionSyntax)generator.LiteralExpression(parameterSymbol.ExplicitDefaultValue)
+                            )
                         );
                     }
                     return parameterDeclaration;
@@ -572,7 +616,12 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             }
             else if (member is IPropertySymbol propertySymbol)
             {
-                var propertyStub = CreateBasePropertyStub(generator, propertySymbol, baseDependenciesInterfaceName, baseDependenciesFieldName);
+                var propertyStub = CreateBasePropertyStub(
+                    generator,
+                    propertySymbol,
+                    baseDependenciesInterfaceName,
+                    baseDependenciesFieldName
+                );
                 members.Add(propertyStub);
             }
         }
@@ -601,9 +650,15 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
                 // Add CallerMemberName attribute if present
                 var callerMemberNameAttributeName = "CallerMemberNameAttribute";
-                if (parameterSymbol.GetAttributes().Any(attributeData => attributeData.AttributeClass?.Name == callerMemberNameAttributeName))
+                if (
+                    parameterSymbol
+                        .GetAttributes()
+                        .Any(attributeData => attributeData.AttributeClass?.Name == callerMemberNameAttributeName)
+                )
                 {
-                    parameterDeclaration = generator.AddAttributes(parameterDeclaration, generator.Attribute("CallerMemberName")) as ParameterSyntax ?? parameterDeclaration;
+                    parameterDeclaration =
+                        generator.AddAttributes(parameterDeclaration, generator.Attribute("CallerMemberName")) as ParameterSyntax
+                        ?? parameterDeclaration;
                 }
 
                 // Add default value if parameter has one
@@ -775,9 +830,15 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
                         // Add CallerMemberName attribute if present
                         var callerMemberNameAttributeName = "CallerMemberNameAttribute";
-                        if (parameterSymbol.GetAttributes().Any(attributeData => attributeData.AttributeClass?.Name == callerMemberNameAttributeName))
+                        if (
+                            parameterSymbol
+                                .GetAttributes()
+                                .Any(attributeData => attributeData.AttributeClass?.Name == callerMemberNameAttributeName)
+                        )
                         {
-                            parameterDeclaration = generator.AddAttributes(parameterDeclaration, generator.Attribute("CallerMemberName")) as ParameterSyntax ?? parameterDeclaration;
+                            parameterDeclaration =
+                                generator.AddAttributes(parameterDeclaration, generator.Attribute("CallerMemberName")) as ParameterSyntax
+                                ?? parameterDeclaration;
                         }
 
                         // Add default value if parameter has one
@@ -841,7 +902,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         // Since they are from testCompilation, we need source symbols from legacyCompilation
         // However, for static calls like DateTime.Now, we use the original symbol.
         // For source symbols, we re-resolve them.
-        
+
         // This is complex, but the original code just used the symbols from testCompilation
         // except for targetType. Let's keep it simple for now and only map what's necessary.
     }
@@ -865,7 +926,10 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 var currentBaseType = legacyTypeSymbol.BaseType;
                 while (currentBaseType != null && currentBaseType.SpecialType != SpecialType.System_Object)
                 {
-                    var baseMatch = currentBaseType.GetMembers().OfType<IMethodSymbol>().FirstOrDefault(legacyMethod => SymbolSignatureComparer.Default.Equals(legacyMethod, methodFromTest));
+                    var baseMatch = currentBaseType
+                        .GetMembers()
+                        .OfType<IMethodSymbol>()
+                        .FirstOrDefault(legacyMethod => SymbolSignatureComparer.Default.Equals(legacyMethod, methodFromTest));
                     if (baseMatch != null)
                     {
                         result.Add(baseMatch);
@@ -882,9 +946,15 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     private static string GetTypeMetadataName(INamedTypeSymbol typeSymbol)
     {
         var originalDefinition = typeSymbol.OriginalDefinition;
-        var namespaceName = originalDefinition.ContainingNamespace is { IsGlobalNamespace: false } ? originalDefinition.ContainingNamespace.ToDisplayString() : null;
+        var namespaceName = originalDefinition.ContainingNamespace is { IsGlobalNamespace: false }
+            ? originalDefinition.ContainingNamespace.ToDisplayString()
+            : null;
         var typeParts = new Stack<string>();
-        for (INamedTypeSymbol? currentTypeSymbol = originalDefinition; currentTypeSymbol != null; currentTypeSymbol = currentTypeSymbol.ContainingType)
+        for (
+            INamedTypeSymbol? currentTypeSymbol = originalDefinition;
+            currentTypeSymbol != null;
+            currentTypeSymbol = currentTypeSymbol.ContainingType
+        )
         {
             typeParts.Push(currentTypeSymbol.MetadataName);
         }
@@ -906,7 +976,9 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         var argumentExpression = invocationExpression.ArgumentList.Arguments[0].Expression;
         if (argumentExpression is LambdaExpressionSyntax lambdaExpression)
         {
-            SyntaxNode nodeToInspect = lambdaExpression.Body is InvocationExpressionSyntax invocationBody ? invocationBody.Expression : lambdaExpression.Body;
+            SyntaxNode nodeToInspect = lambdaExpression.Body is InvocationExpressionSyntax invocationBody
+                ? invocationBody.Expression
+                : lambdaExpression.Body;
             var methodSymbol = semanticModel.GetSymbolInfo(nodeToInspect).Symbol as IMethodSymbol;
             if (methodSymbol != null)
             {
@@ -915,7 +987,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }
     }
 
-    private void AddToMockable(SemanticModel semanticModel, FlexibleTestingInstructions instructions, InvocationExpressionSyntax invocationExpression)
+    private void AddToMockable(
+        SemanticModel semanticModel,
+        FlexibleTestingInstructions instructions,
+        InvocationExpressionSyntax invocationExpression
+    )
     {
         if (invocationExpression.ArgumentList.Arguments.Count == 0)
         {
@@ -927,7 +1003,10 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
         if (argumentExpression is LambdaExpressionSyntax lambdaExpression)
         {
-            if (lambdaExpression is ParenthesizedLambdaExpressionSyntax parenthesizedLambda && parenthesizedLambda.ParameterList.Parameters.Count > 0)
+            if (
+                lambdaExpression is ParenthesizedLambdaExpressionSyntax parenthesizedLambda
+                && parenthesizedLambda.ParameterList.Parameters.Count > 0
+            )
             {
                 return; // Ignore lambda's with paramters like (x) => ... or (x, y) => ...
             }
@@ -941,7 +1020,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
             if (bodyExpression is not null)
             {
-                symbol = semanticModel.GetSymbolInfo(bodyExpression).Symbol
+                symbol =
+                    semanticModel.GetSymbolInfo(bodyExpression).Symbol
                     ?? bodyExpression switch
                     {
                         MemberAccessExpressionSyntax memberAccess => semanticModel.GetSymbolInfo(memberAccess.Name).Symbol,
