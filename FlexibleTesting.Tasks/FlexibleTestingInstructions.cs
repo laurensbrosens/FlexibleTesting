@@ -1,14 +1,13 @@
 using Microsoft.CodeAnalysis;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace FlexibleTesting.Tasks;
 
 public class FlexibleTestingInstructions
 {
-    public required INamedTypeSymbol TargetType { get; set; }
-    public required string OldClassName { get; set; }
-    public required string NewClassName { get; set; }
+    public INamedTypeSymbol TargetType { get; set; }
+    public string OldClassName { get; set; }
+    public string NewClassName { get; set; }
     
     public HashSet<IMethodSymbol> MethodsToMakePublic { get; } = new(SymbolSignatureComparer.Default);
     
@@ -21,9 +20,9 @@ public class FlexibleTestingInstructions
     /// </summary>
     public Dictionary<ISymbol, string> DependencyMemberNames { get; } = new(SymbolSignatureComparer.Default);
 
-    public required string DependenciesInterfaceName { get; set; }
-    public required string DependenciesFieldName { get; set; }
-    public required string DependenciesParameterName { get; set; }
+    public string DependenciesInterfaceName { get; set; }
+    public string DependenciesFieldName { get; set; }
+    public string DependenciesParameterName { get; set; }
     public bool MockInheritance { get; set; }
 
     public IEnumerable<ISymbol> AllMockables
@@ -32,7 +31,7 @@ public class FlexibleTestingInstructions
         {
             foreach (var method in MockableMethods) yield return method;
             foreach (var property in MockableProperties) yield return property;
-            foreach (var field in MockableFields) yield return field;
+            foreach (var @field in MockableFields) yield return @field;
         }
     }
 }
