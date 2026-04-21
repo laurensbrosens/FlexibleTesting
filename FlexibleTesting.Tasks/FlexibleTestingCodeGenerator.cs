@@ -147,9 +147,15 @@ public class FlexibleTestingCodeGenerator
         );
         editor.InsertBefore(classNode, BuildBaseDependenciesInterface(gen, instructions.OldClassName, usedMembers));
 
-        return usedMembers
-            .OfType<IMethodSymbol>()
-            .Any(m => m.Parameters.Any(p => p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute")));
+        return false;
+    }
+
+    private IEnumerable<AttributeSyntax> GetAttributeSyntax(ISymbol symbol)
+    {
+        return symbol.GetAttributes().Select(a => SyntaxFactory.Attribute(SyntaxFactory.ParseName(a.AttributeClass!.ToDisplayString()))
+            .WithArgumentList(a.ConstructorArguments.Length > 0 
+                ? SyntaxFactory.AttributeArgumentList(SyntaxFactory.SeparatedList(a.ConstructorArguments.Select(arg => SyntaxFactory.AttributeArgument(SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(arg.Value?.ToString() ?? ""))))))
+                : null));
     }
 
     private SyntaxNode BuildDependenciesInterface(SyntaxGenerator gen, FlexibleTestingInstructions instructions, Compilation comp)
@@ -161,27 +167,39 @@ public class FlexibleTestingCodeGenerator
             {
                 var parameters = method.Parameters.Select(p =>
                 {
-                    var decl = gen.ParameterDeclaration(p.Name, gen.TypeExpression(p.Type));
-                    if (p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute"))
-                        decl = gen.AddAttributes(decl, gen.Attribute("CallerMemberName"));
+                    var decl = (ParameterSyntax)gen.ParameterDeclaration(p.Name, gen.TypeExpression(p.Type));
+                    var attributes = GetAttributeSyntax(p);
+                    foreach(var attr in attributes) decl = (ParameterSyntax)gen.AddAttributes(decl, attr);
+
                     if (p.HasExplicitDefaultValue)
-                        decl = ((ParameterSyntax)decl).WithDefault(
+                        decl = decl.WithDefault(
                             SyntaxFactory.EqualsValueClause((ExpressionSyntax)gen.LiteralExpression(p.ExplicitDefaultValue))
                         );
                     return decl;
                 });
-                return gen.MethodDeclaration(
+                
+                var methodDecl = (MethodDeclarationSyntax)gen.MethodDeclaration(
                     name,
                     parameters: parameters,
                     returnType: gen.TypeExpression(method.ReturnType),
                     accessibility: Accessibility.Public
                 );
+
+                var methodAttributes = GetAttributeSyntax(method);
+                foreach(var attr in methodAttributes) methodDecl = (MethodDeclarationSyntax)gen.AddAttributes(methodDecl, attr);
+                
+                return methodDecl;
             }
-            return gen.PropertyDeclaration(
+            
+            var propDecl = gen.PropertyDeclaration(
                 name,
                 gen.TypeExpression(GetMockableDelegateType(comp, mockable)),
                 accessibility: Accessibility.Public
             );
+            var propAttributes = GetAttributeSyntax(mockable);
+            foreach(var attr in propAttributes) propDecl = gen.AddAttributes(propDecl, attr);
+            
+            return propDecl;
         });
 
         return gen.InterfaceDeclaration(instructions.DependenciesInterfaceName, accessibility: Accessibility.Public, members: members)
@@ -272,8 +290,9 @@ public class FlexibleTestingCodeGenerator
         var parameters = ms.Parameters.Select(p =>
         {
             var decl = (ParameterSyntax)gen.ParameterDeclaration(p.Name, GetTypeNameSyntax(p.Type));
-            if (p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute"))
-                decl = gen.AddAttributes(decl, gen.Attribute("CallerMemberName")) as ParameterSyntax ?? decl;
+            var attributes = GetAttributeSyntax(p);
+            foreach(var attr in attributes) decl = (ParameterSyntax)gen.AddAttributes(decl, attr);
+            
             if (p.HasExplicitDefaultValue)
                 decl = decl.WithDefault(
                     SyntaxFactory.EqualsValueClause(
@@ -302,16 +321,19 @@ public class FlexibleTestingCodeGenerator
         var accessibility = shouldBePublic
             ? Accessibility.Public
             : (ms.DeclaredAccessibility == Accessibility.Protected ? Accessibility.Protected : Accessibility.Public);
-        return (
-            (MethodDeclarationSyntax)
+        var methodDecl = (MethodDeclarationSyntax)
                 gen.MethodDeclaration(
                     ms.Name,
                     parameters: parameters,
                     returnType: GetTypeNameSyntax(ms.ReturnType),
                     accessibility: accessibility,
                     modifiers: DeclarationModifiers.Virtual
-                )
-        ).WithBody(SyntaxFactory.Block(body));
+                );
+
+        var methodAttributes = GetAttributeSyntax(ms);
+        foreach(var attr in methodAttributes) methodDecl = (MethodDeclarationSyntax)gen.AddAttributes(methodDecl, attr);
+        
+        return methodDecl.WithBody(SyntaxFactory.Block(body));
     }
 
     private PropertyDeclarationSyntax CreateBasePropertyStub(SyntaxGenerator gen, IPropertySymbol ps)
@@ -340,8 +362,9 @@ public class FlexibleTestingCodeGenerator
                 var parameters = ms.Parameters.Select(p =>
                 {
                     var decl = (ParameterSyntax)gen.ParameterDeclaration(p.Name, GetTypeNameSyntax(p.Type));
-                    if (p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute"))
-                        decl = gen.AddAttributes(decl, gen.Attribute("CallerMemberName")) as ParameterSyntax ?? decl;
+                    var attributes = GetAttributeSyntax(p);
+                    foreach(var attr in attributes) decl = (ParameterSyntax)gen.AddAttributes(decl, attr);
+                    
                     if (p.HasExplicitDefaultValue)
                         decl = decl.WithDefault(
                             SyntaxFactory.EqualsValueClause(
@@ -352,14 +375,25 @@ public class FlexibleTestingCodeGenerator
                         );
                     return decl;
                 });
-                return gen.MethodDeclaration(
+                
+                var methodDecl = gen.MethodDeclaration(
                     ms.Name,
                     parameters: parameters,
                     returnType: GetTypeNameSyntax(ms.ReturnType),
                     accessibility: Accessibility.Public
                 );
+
+                var methodAttributes = GetAttributeSyntax(ms);
+                foreach(var attr in methodAttributes) methodDecl = gen.AddAttributes(methodDecl, attr);
+                
+                return methodDecl;
             }
-            return gen.PropertyDeclaration(m.Name, GetTypeNameSyntax(((IPropertySymbol)m).Type), accessibility: Accessibility.Public);
+            
+            var propDecl = gen.PropertyDeclaration(m.Name, GetTypeNameSyntax(((IPropertySymbol)m).Type), accessibility: Accessibility.Public);
+            var propAttributes = GetAttributeSyntax(m);
+            foreach(var attr in propAttributes) propDecl = gen.AddAttributes(propDecl, attr);
+            
+            return propDecl;
         });
 
         return gen.InterfaceDeclaration($"IAuto{oldName}BaseDependencies", accessibility: Accessibility.Public, members: ifaceMembers)

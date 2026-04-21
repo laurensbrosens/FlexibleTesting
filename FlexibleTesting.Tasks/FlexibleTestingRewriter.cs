@@ -108,7 +108,6 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
         if (symbol != null && instructions.DependencyMemberNames.TryGetValue(symbol, out var dependencyName))
         {
-            CheckForCallerMemberName(symbol);
             return generator
                 .InvocationExpression(
                     generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName),
@@ -124,7 +123,6 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
         if (symbol != null && instructions.DependencyMemberNames.TryGetValue(symbol, out var dependencyName))
         {
-            CheckForCallerMemberName(symbol);
             return generator
                 .InvocationExpression(
                     generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName)
@@ -134,14 +132,5 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         return base.VisitMemberAccessExpression(node);
     }
 
-    private void CheckForCallerMemberName(ISymbol symbol)
-    {
-        if (
-            symbol is IMethodSymbol method
-            && method.Parameters.Any(p => p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute"))
-        )
-        {
-            NeedsCallerMemberName = true;
-        }
-    }
+    private void CheckForCallerMemberName(ISymbol symbol) { }
 }
