@@ -18,6 +18,7 @@ internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewMod
         Overwrites.Mockable(() => Now);
         Overwrites.Mockable(DoesThisEvenWork);
         Overwrites.MakePublic(OnPropertyChanged);
+        Overwrites.MakePublic(OnLoad);
         //Overwrites.Mockable(() => DateTime.Today);
         // Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad); // Don't need IShadow, does not work for private of course, but works for protected, internal and protected internal
         Overwrites.MakePublic<IShadow, Action>(x => x.SomePrivateMethod);

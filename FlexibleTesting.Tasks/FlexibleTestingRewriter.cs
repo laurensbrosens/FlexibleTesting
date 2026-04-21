@@ -7,36 +7,19 @@ using System.Linq;
 
 namespace FlexibleTesting.Tasks;
 
-/// <summary>
-/// Handles surgical rewrites of the syntax tree, such as renaming classes,
-/// replacing mockable calls, and updating modifiers.
-/// </summary>
-public class FlexibleTestingRewriter : CSharpSyntaxRewriter
+public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestingInstructions instructions, SyntaxGenerator generator)
+    : CSharpSyntaxRewriter
 {
-    private readonly SemanticModel _semanticModel;
-    private readonly FlexibleTestingInstructions _instructions;
-    private readonly SyntaxGenerator _generator;
-
     public bool NeedsCallerMemberName { get; private set; }
-
-    public FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestingInstructions instructions, SyntaxGenerator generator)
-    {
-        _semanticModel = semanticModel;
-        _instructions = instructions;
-        _generator = generator;
-    }
 
     public override SyntaxNode? VisitClassDeclaration(ClassDeclarationSyntax node)
     {
         var rewrittenNode = (ClassDeclarationSyntax)base.VisitClassDeclaration(node)!;
+        var updatedNode = rewrittenNode.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
 
-        // 1. Rename the class
-        var updatedNode = rewrittenNode.WithIdentifier(SyntaxFactory.Identifier(_instructions.NewClassName));
-
-        // 2. Update base class if MockInheritance is enabled
-        if (_instructions.MockInheritance && updatedNode.BaseList != null)
+        if (instructions.MockInheritance && updatedNode.BaseList != null)
         {
-            var baseClassName = $"{_instructions.OldClassName}Base_G";
+            var baseClassName = $"{instructions.OldClassName}Base_G";
             var newBaseList = updatedNode.BaseList.WithTypes(
                 SyntaxFactory.SeparatedList(
                     new BaseTypeSyntax[] { SyntaxFactory.SimpleBaseType(SyntaxFactory.IdentifierName(baseClassName)) }
@@ -51,48 +34,38 @@ public class FlexibleTestingRewriter : CSharpSyntaxRewriter
     public override SyntaxNode? VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
     {
         var rewrittenNode = (ConstructorDeclarationSyntax)base.VisitConstructorDeclaration(node)!;
+        var updatedNode = rewrittenNode.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
 
-        // Rename constructor to match new class name
-        var updatedNode = rewrittenNode.WithIdentifier(SyntaxFactory.Identifier(_instructions.NewClassName));
+        var dependenciesParamName = instructions.DependenciesParameterName;
+        if (updatedNode.ParameterList.Parameters.Any(p => p.Identifier.Text == dependenciesParamName))
+            dependenciesParamName += "2";
 
-        // Inject dependencies
-        var paramName = _instructions.DependenciesParameterName;
-        if (updatedNode.ParameterList.Parameters.Any(p => p.Identifier.Text == paramName))
-        {
-            paramName += "2";
-        }
-
-        var newParam = (ParameterSyntax)
-            _generator.ParameterDeclaration(paramName, _generator.IdentifierName(_instructions.DependenciesInterfaceName));
-
-        var assignment = (StatementSyntax)
-            _generator.ExpressionStatement(
-                _generator.AssignmentStatement(
-                    _generator.IdentifierName(_instructions.DependenciesFieldName),
-                    _generator.IdentifierName(paramName)
+        var dependenciesParam = (ParameterSyntax)
+            generator.ParameterDeclaration(dependenciesParamName, generator.IdentifierName(instructions.DependenciesInterfaceName));
+        var dependenciesAssignment = (StatementSyntax)
+            generator.ExpressionStatement(
+                generator.AssignmentStatement(
+                    generator.IdentifierName(instructions.DependenciesFieldName),
+                    generator.IdentifierName(dependenciesParamName)
                 )
             );
 
-        var statements = new List<StatementSyntax>();
+        var statements = new List<StatementSyntax> { dependenciesAssignment };
+        updatedNode = updatedNode.AddParameterListParameters(dependenciesParam);
 
-        // First add the normal dependencies
-        updatedNode = updatedNode.AddParameterListParameters(newParam);
-        statements.Add(assignment);
-
-        if (_instructions.MockInheritance)
+        if (instructions.MockInheritance)
         {
             var baseDepsParamName = "baseDependencies";
             if (updatedNode.ParameterList.Parameters.Any(p => p.Identifier.Text == baseDepsParamName))
-            {
                 baseDepsParamName += "2";
-            }
 
-            var baseDepsInterface = $"IAuto{_instructions.OldClassName}BaseDependencies";
-            var baseParam = (ParameterSyntax)
-                _generator.ParameterDeclaration(baseDepsParamName, _generator.IdentifierName(baseDepsInterface));
+            var baseDepsParam = (ParameterSyntax)
+                generator.ParameterDeclaration(
+                    baseDepsParamName,
+                    generator.IdentifierName($"IAuto{instructions.OldClassName}BaseDependencies")
+                );
 
-            // Update base() call
-            if (updatedNode.Initializer != null && updatedNode.Initializer.IsKind(SyntaxKind.BaseConstructorInitializer))
+            if (updatedNode.Initializer?.IsKind(SyntaxKind.BaseConstructorInitializer) == true)
             {
                 var baseArgs = updatedNode.Initializer.ArgumentList.Arguments.Add(
                     SyntaxFactory.Argument(SyntaxFactory.IdentifierName(baseDepsParamName))
@@ -103,77 +76,59 @@ public class FlexibleTestingRewriter : CSharpSyntaxRewriter
             }
 
             var baseAssignment = (StatementSyntax)
-                _generator.ExpressionStatement(
-                    _generator.AssignmentStatement(
-                        _generator.IdentifierName("_baseDependencies"),
-                        _generator.IdentifierName(baseDepsParamName)
+                generator.ExpressionStatement(
+                    generator.AssignmentStatement(
+                        generator.IdentifierName("_baseDependencies"),
+                        generator.IdentifierName(baseDepsParamName)
                     )
                 );
-
-            // Then add base dependencies so they appear last
-            updatedNode = updatedNode.AddParameterListParameters(baseParam);
+            updatedNode = updatedNode.AddParameterListParameters(baseDepsParam);
             statements.Add(baseAssignment);
         }
 
-        if (updatedNode.Body != null)
-        {
-            updatedNode = updatedNode.WithBody(
-                updatedNode.Body.WithStatements(SyntaxFactory.List(statements.Concat(updatedNode.Body.Statements)))
-            );
-        }
-        else
-        {
-            updatedNode = updatedNode.WithBody(SyntaxFactory.Block(statements)).WithExpressionBody(null).WithSemicolonToken(default);
-        }
-
-        return updatedNode;
+        return updatedNode.Body != null
+            ? updatedNode.WithBody(updatedNode.Body.WithStatements(SyntaxFactory.List(statements.Concat(updatedNode.Body.Statements))))
+            : updatedNode.WithBody(SyntaxFactory.Block(statements)).WithExpressionBody(null).WithSemicolonToken(default);
     }
 
     public override SyntaxNode? VisitMethodDeclaration(MethodDeclarationSyntax node)
     {
-        var symbol = _semanticModel.GetDeclaredSymbol(node);
-
+        var symbol = semanticModel.GetDeclaredSymbol(node);
         var rewrittenNode = (MethodDeclarationSyntax)base.VisitMethodDeclaration(node)!;
 
-        if (symbol != null && _instructions.MethodsToMakePublic.Contains(symbol))
-        {
-            rewrittenNode = MakePublic(rewrittenNode);
-        }
-
-        return rewrittenNode;
+        return (symbol != null && instructions.MethodsToMakePublic.Contains(symbol))
+            ? (MethodDeclarationSyntax)generator.WithAccessibility(rewrittenNode, Accessibility.Public)
+            : rewrittenNode;
     }
 
     public override SyntaxNode? VisitInvocationExpression(InvocationExpressionSyntax node)
     {
-        var symbol = _semanticModel.GetSymbolInfo(node).Symbol;
-        if (symbol != null && _instructions.DependencyMemberNames.TryGetValue(symbol, out var depName))
+        var symbol = semanticModel.GetSymbolInfo(node).Symbol;
+        if (symbol != null && instructions.DependencyMemberNames.TryGetValue(symbol, out var dependencyName))
         {
             CheckForCallerMemberName(symbol);
-
-            var replacement = _generator.InvocationExpression(
-                _generator.MemberAccessExpression(_generator.IdentifierName(_instructions.DependenciesFieldName), depName),
-                node.ArgumentList.Arguments.Select(a => a.Expression)
-            );
-            return replacement.WithTriviaFrom(node);
+            return generator
+                .InvocationExpression(
+                    generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName),
+                    node.ArgumentList.Arguments.Select(a => a.Expression)
+                )
+                .WithTriviaFrom(node);
         }
-
         return base.VisitInvocationExpression(node);
     }
 
     public override SyntaxNode? VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
     {
-        var symbol = _semanticModel.GetSymbolInfo(node).Symbol;
-        if (symbol != null && _instructions.DependencyMemberNames.TryGetValue(symbol, out var depName))
+        var symbol = semanticModel.GetSymbolInfo(node).Symbol;
+        if (symbol != null && instructions.DependencyMemberNames.TryGetValue(symbol, out var dependencyName))
         {
             CheckForCallerMemberName(symbol);
-
-            // If it's a property/field, replace with dependency call
-            var replacement = _generator.InvocationExpression(
-                _generator.MemberAccessExpression(_generator.IdentifierName(_instructions.DependenciesFieldName), depName)
-            );
-            return replacement.WithTriviaFrom(node);
+            return generator
+                .InvocationExpression(
+                    generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName)
+                )
+                .WithTriviaFrom(node);
         }
-
         return base.VisitMemberAccessExpression(node);
     }
 
@@ -186,10 +141,5 @@ public class FlexibleTestingRewriter : CSharpSyntaxRewriter
         {
             NeedsCallerMemberName = true;
         }
-    }
-
-    private MethodDeclarationSyntax MakePublic(MethodDeclarationSyntax node)
-    {
-        return (MethodDeclarationSyntax)_generator.WithAccessibility(node, Accessibility.Public);
     }
 }
