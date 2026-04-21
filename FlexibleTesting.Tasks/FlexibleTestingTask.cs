@@ -5,6 +5,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.MSBuild;
+using Microsoft.CodeAnalysis.Simplification;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -17,10 +18,6 @@ namespace FlexibleTesting.Tasks;
 // Usefull info about someone who does something similar (he mocks the mocks to make them compile time instead of runtime): https://github.com/dotnet/roslyn/issues/4974
 public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 {
-    private static readonly SymbolDisplayFormat FullFormat = SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(
-        SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier
-    );
-
     /// <summary>
     /// Default output path is e.g., ..\TestProject\Generated
     /// </summary>
@@ -445,7 +442,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
         if (finalClassNode != null)
         {
-            var interfaceDeclaration = BuildDependenciesInterface(syntaxGenerator3, instructions);
+            var interfaceDeclaration = BuildDependenciesInterface(syntaxGenerator3, instructions, semanticModel.Compilation);
             documentEditor3.InsertAfter(finalClassNode, interfaceDeclaration);
             changedDocument = documentEditor3.GetChangedDocument();
         }
@@ -516,22 +513,31 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             }
         }
 
-        // Phase 4: Add using for System.Runtime.CompilerServices if needed
-        if (needsCallerMemberName)
-        {
-            var documentEditor4 = await DocumentEditor.CreateAsync(changedDocument);
-            var syntaxGenerator4 = documentEditor4.Generator;
-            var root4 = await changedDocument.GetSyntaxRootAsync();
+        // Phase 4: Add necessary using directives
+        var documentEditor4 = await DocumentEditor.CreateAsync(changedDocument);
+        var syntaxGenerator4 = documentEditor4.Generator;
+        var root4 = await changedDocument.GetSyntaxRootAsync();
 
-            var compilerServicesNamespace = "System.Runtime.CompilerServices";
-            if (root4 is CompilationUnitSyntax compilationUnit)
+        if (root4 is CompilationUnitSyntax compilationUnit)
+        {
+            var usingsToAdd = new List<string> { nameof(System) };
+            if (needsCallerMemberName)
             {
-                if (!compilationUnit.Usings.Any(usingDirective => usingDirective.Name?.ToString() == compilerServicesNamespace))
-                {
-                    var newUsingDirective = (UsingDirectiveSyntax)syntaxGenerator4.NamespaceImportDeclaration(compilerServicesNamespace);
-                    documentEditor4.ReplaceNode(compilationUnit, (node, generator) => ((CompilationUnitSyntax)node).AddUsings(newUsingDirective));
-                    changedDocument = documentEditor4.GetChangedDocument();
-                }
+                usingsToAdd.Add("System.Runtime.CompilerServices");
+            }
+
+            var currentUsings = compilationUnit.Usings.Select(u => u.Name?.ToString()).ToHashSet();
+            var newUsings = usingsToAdd
+                .Where(u => !currentUsings.Contains(u))
+                .Select(u => (UsingDirectiveSyntax)syntaxGenerator4.NamespaceImportDeclaration(u))
+                .ToArray();
+
+            if (newUsings.Any())
+            {
+                documentEditor4.ReplaceNode(compilationUnit, (node, _) => ((CompilationUnitSyntax)node).AddUsings(newUsings));
+                changedDocument = documentEditor4.GetChangedDocument();
+
+                changedDocument = await Simplifier.ReduceAsync(changedDocument);
             }
         }
 
@@ -1021,7 +1027,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return usedMembers.ToList();
     }
 
-    private static SyntaxNode BuildDependenciesInterface(SyntaxGenerator generator, FlexibleTestingInstructions instructions)
+    private static SyntaxNode BuildDependenciesInterface(SyntaxGenerator generator, FlexibleTestingInstructions instructions, Compilation compilation)
     {
         var members = new List<SyntaxNode>();
 
@@ -1033,7 +1039,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             {
                 var methodParameters = methodSymbol.Parameters.Select(parameterSymbol =>
                 {
-                    var parameterDeclaration = generator.ParameterDeclaration(parameterSymbol.Name, generator.IdentifierName(parameterSymbol.Type.ToDisplayString()));
+                    var parameterDeclaration = generator.ParameterDeclaration(parameterSymbol.Name, generator.TypeExpression(parameterSymbol.Type));
                     if (parameterSymbol.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute"))
                     {
                         parameterDeclaration = generator.AddAttributes(parameterDeclaration, generator.Attribute("CallerMemberName"));
@@ -1047,15 +1053,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     return parameterDeclaration;
                 });
 
-                SyntaxNode returnTypeNode;
-                if (methodSymbol.ReturnType.SpecialType == SpecialType.System_Void)
-                {
-                    returnTypeNode = SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.VoidKeyword));
-                }
-                else
-                {
-                    returnTypeNode = generator.IdentifierName(methodSymbol.ReturnType.ToDisplayString());
-                }
+                var returnTypeNode = generator.TypeExpression(methodSymbol.ReturnType);
 
                 var methodDeclaration = generator.MethodDeclaration(
                     dependencyMemberName,
@@ -1069,7 +1067,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             {
                 var propertyDeclaration = generator.PropertyDeclaration(
                     dependencyMemberName,
-                    generator.IdentifierName(MockableHelper_GetDelegateTypeDisplay(mockableSymbol)),
+                    generator.TypeExpression(GetMockableDelegateType(compilation, mockableSymbol)),
                     accessibility: Accessibility.Public,
                     getAccessorStatements: null
                 );
@@ -1087,9 +1085,9 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return interfaceDeclaration.WithLeadingTrivia(SyntaxFactory.TriviaList(documentationComment));
     }
 
-    private static string MockableHelper_GetDelegateTypeDisplay(ISymbol symbol)
+    private static ITypeSymbol GetMockableDelegateType(Compilation compilation, ISymbol symbol)
     {
-        var (type, parameters) = symbol switch
+        var (returnType, parameters) = symbol switch
         {
             IPropertySymbol propertySymbol => (propertySymbol.Type, Array.Empty<IParameterSymbol>()),
             IFieldSymbol fieldSymbol => (fieldSymbol.Type, Array.Empty<IParameterSymbol>()),
@@ -1097,17 +1095,21 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             _ => throw new ArgumentException("Unsupported symbol kind", nameof(symbol)),
         };
 
-        var isVoid = type.SpecialType == SpecialType.System_Void;
-        var paramTypes = parameters.Select(p => p.Type).ToList();
-        var types = isVoid ? paramTypes : paramTypes.Concat(new[] { type });
-        var typeList = string.Join(", ", types.Select(t => t.ToDisplayString(FullFormat)));
+        var isVoid = returnType.SpecialType == SpecialType.System_Void;
+        var typeArgs = isVoid
+            ? parameters.Select(p => p.Type).ToArray()
+            : parameters.Select(p => p.Type).Concat(new[] { returnType }).ToArray();
 
-        return (isVoid, paramTypes.Count) switch
+        string baseName = isVoid ? typeof(Action).FullName! : typeof(Func<>).FullName!.Split('`')[0];
+        string metadataName = (isVoid && typeArgs.Length == 0) ? baseName : $"{baseName}`{typeArgs.Length}";
+
+        var delegateSymbol = compilation.GetTypeByMetadataName(metadataName);
+        if (delegateSymbol == null)
         {
-            (true, 0) => "global::System.Action",
-            (true, _) => $"global::System.Action<{typeList}>",
-            (false, _) => $"global::System.Func<{typeList}>",
-        };
+            throw new InvalidOperationException($"Could not find delegate type {metadataName} in compilation.");
+        }
+
+        return typeArgs.Length == 0 ? delegateSymbol : delegateSymbol.Construct(typeArgs);
     }
 
     private static SyntaxNode BuildBaseClassReplacement(
@@ -1568,11 +1570,12 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         int duplicateSuffix = 1;
 
         // Voorkom dubbele namen in de lijst: als de naam al bestaat, voeg een nummer toe (bijv. _1, _2).
+        /*
         while (instructions.DependencyMemberNames.Values.Any(name => string.Equals(name, finalMemberName, StringComparison.Ordinal)))
         {
             finalMemberName = $"{baseMemberName}_{duplicateSuffix}";
             duplicateSuffix++;
-        }
+        }*/
 
         switch (symbol)
         {

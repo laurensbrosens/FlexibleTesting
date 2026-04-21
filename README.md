@@ -189,9 +189,9 @@ public class UserViewModel_G : BaseViewModel_G
 /// <summary>Mock this using NSubstitute</summary>
 public interface IAutoUserViewModelDependencies
 {
-    global::System.Func<global::System.DateTime> Now { get; }
+    Func<DateTime> Now { get; }
 
-    void OnPropertyChanged([CallerMemberName] global::System.String propertyName = "");
+    void OnPropertyChanged([CallerMemberName] string propertyName = "");
 }
 
 public class BaseViewModel_G(IAutoBaseViewModelDependencies dependencies)
@@ -201,7 +201,7 @@ public class BaseViewModel_G(IAutoBaseViewModelDependencies dependencies)
         dependencies.OnLoad(sender, e);
     }
 
-    public void OnPropertyChanged([CallerMemberName] global::System.String propertyName = "")
+    public void OnPropertyChanged([CallerMemberName] string propertyName = "")
     {
         dependencies.OnPropertyChanged(propertyName);
     }
