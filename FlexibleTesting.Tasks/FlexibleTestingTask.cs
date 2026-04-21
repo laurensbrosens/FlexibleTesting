@@ -70,25 +70,38 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     {
         var targetSymbol = testComp.GetTypeByMetadataName(typeof(GeneratorInstructionsAttribute).FullName!);
 
-        var builders = testComp.SyntaxTrees.SelectMany(st =>
+        foreach (var tree in testComp.SyntaxTrees)
         {
-            var model = testComp.GetSemanticModel(st);
-            return st.GetRoot()
-                .DescendantNodes()
-                .OfType<ClassDeclarationSyntax>()
-                .Select(node => (node, model, symbol: model.GetDeclaredSymbol(node)))
-                .Where(t => t.symbol?.GetAttributes().Any(a => a.AttributeClass?.IsEqualToSymbol(targetSymbol) ?? false) == true);
-        });
-
-        foreach (var (node, builderSemanticModel, _) in builders)
-        {
-            GenerateForFlexibleTesting(legacyProject, testComp, legacyComp, builderSemanticModel, node);
+            ProcessTree(tree, legacyProject, legacyComp, testComp, targetSymbol);
         }
+    }
+
+    private void ProcessTree(SyntaxTree tree, Project project, Compilation legacyComp, Compilation testComp, INamedTypeSymbol? targetSymbol)
+    {
+        var model = testComp.GetSemanticModel(tree);
+        var classes = tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>();
+
+        foreach (var @class in classes)
+        {
+            if (IsTargetBuilder(@class, model, targetSymbol))
+            {
+                GenerateForFlexibleTesting(project, legacyComp, model, @class);
+            }
+        }
+    }
+
+    private bool IsTargetBuilder(ClassDeclarationSyntax @class, SemanticModel model, ISymbol? targetSymbol)
+    {
+        var symbol = model.GetDeclaredSymbol(@class);
+        if (symbol == null)
+        {
+            return false;
+        }
+        return symbol.GetAttributes().Any(a => a.AttributeClass?.IsEqualToSymbol(targetSymbol) ?? false);
     }
 
     private void GenerateForFlexibleTesting(
         Project project,
-        Compilation testCompilation,
         Compilation legacyCompilation,
         SemanticModel builderSemanticModel,
         ClassDeclarationSyntax classNode
@@ -108,24 +121,20 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         INamedTypeSymbol? targetTypeFromTest = null;
         var mockInheritanceFromTest = false;
 
-        // Haalt het symbool op voor de 'Overwrites' klasse om types te kunnen vergelijken
         var overwritesSymbol = builderSemanticModel.Compilation.GetTypeByMetadataName(typeof(Overwrites).FullName!);
 
-        // Vindt alle methode-aanroepen binnen de Configure() body, zoals 'Overwrites.Mock<UserService>()'
-        var invocations = configureMethod.Body.DescendantNodes().OfType<InvocationExpressionSyntax>();
+        // All method calls inside the Configure() body, like 'Overwrites.Mock<UserService>()'
+        var allInstructionMethods = configureMethod.Body.DescendantNodes().OfType<InvocationExpressionSyntax>();
 
-        foreach (var invocation in invocations)
+        foreach (var instructionMethod in allInstructionMethods)
         {
-            // Probeert de semantische betekenis van de aanroep te achterhalen (bijv. welke specifieke 'Mock' overload wordt gebruikt)
-            if (builderSemanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol)
+            if (builderSemanticModel.GetSymbolInfo(instructionMethod).Symbol is not IMethodSymbol methodSymbol)
             {
-                // Slaat de aanroep over als het symbool niet gevonden kan worden (bijv. bij compileerfouten)
+                // Skip invalid methods
                 continue;
             }
 
-            // Vanaf hier kun je 'methodSymbol' gebruiken om te checken of de aanroep
-            // afkomstig is van de 'overwritesSymbol' klasse en welke actie de Generator moet ondernemen.
-            if (!methodSymbol.IsDeclaredIn(overwritesSymbol))
+            if (!methodSymbol.IsDeclaredIn(overwritesSymbol)) // Sanity check, only process methods from the Overwrites class
             {
                 continue;
             }
@@ -137,11 +146,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     break;
 
                 case nameof(Overwrites.MakePublic):
-                    AddToMakePublic(builderSemanticModel, methodsToMakePublicFromTest, invocation);
+                    AddToMakePublic(builderSemanticModel, methodsToMakePublicFromTest, instructionMethod);
                     break;
 
                 case nameof(Overwrites.Mockable):
-                    AddToMockable(builderSemanticModel, mockablesFromTest, invocation);
+                    AddToMockable(builderSemanticModel, mockablesFromTest, instructionMethod);
                     break;
 
                 case nameof(Overwrites.MockInheritance):
@@ -149,16 +158,12 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     break;
 
                 case nameof(Overwrites.Mock):
+                    // TODO: Implement Mock
                     break;
             }
         }
 
         if (targetTypeFromTest == null || targetTypeFromTest.TypeKind == TypeKind.Error)
-        {
-            return;
-        }
-
-        if (legacyCompilation == null)
         {
             return;
         }
