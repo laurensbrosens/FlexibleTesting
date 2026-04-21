@@ -1,3 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 using FlexibleTestingDomain;
 using Microsoft.Build.Framework;
 using Microsoft.CodeAnalysis;
@@ -5,12 +11,6 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.MSBuild;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace FlexibleTesting.Tasks;
 
@@ -1463,52 +1463,93 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     private void AddToMockable(SemanticModel semanticModel, List<MockableSpec> mockables, InvocationExpressionSyntax invocation)
     {
         if (invocation.ArgumentList.Arguments.Count == 0)
+        {
             return;
-        var argument = invocation.ArgumentList.Arguments[0].Expression;
+        }
+
+        var argument = invocation.ArgumentList.Arguments.First().Expression;
+
         if (argument is not LambdaExpressionSyntax lambda)
-            return;
-        if (
-            lambda switch
+        {
+            if (argument is not IdentifierNameSyntax methodGroup)
             {
-                ParenthesizedLambdaExpressionSyntax pl => pl.ParameterList.Parameters.Count,
-                SimpleLambdaExpressionSyntax => 1,
-                _ => 0,
-            } != 0
-        )
+                return;
+            }
+
+            var methodGroupSymbol = semanticModel.GetSymbolInfo(methodGroup).Symbol;
+            if (methodGroupSymbol is not IMethodSymbol methodSymbol)
+            {
+                return;
+            }
+
+            var methodSpec = MockableSpec.TryCreate(methodSymbol);
+            if (methodSpec != null)
+            {
+                mockables.Add(methodSpec);
+            }
+
+            return;
+        }
+
+        if (lambda is SimpleLambdaExpressionSyntax)
+        {
+            return; // Ignore simple lambdas like Overwrites.Mockable(x => x.SomeMethod());
+        }
+
+        if (lambda is ParenthesizedLambdaExpressionSyntax parenthesized)
+        {
+            if (parenthesized.ParameterList.Parameters.Count > 0)
+            {
+                return; // Ignore lambda's with paramters like (x) => ... or (x, y) => ...
+            }
+        }
+
+        var bodyExpr = lambda.Body switch
+        {
+            ExpressionSyntax expr => expr, // () => SomeMethod()
+            BlockSyntax block => block.Statements.OfType<ReturnStatementSyntax>().FirstOrDefault()?.Expression, // () => { return SomeMethod(); }
+            _ => null,
+        };
+
+        if (bodyExpr is null)
         {
             return;
         }
-        ExpressionSyntax? bodyExpr = lambda.Body as ExpressionSyntax;
-        if (bodyExpr == null && lambda.Body is BlockSyntax block)
-            bodyExpr =
-                block.Statements.OfType<ReturnStatementSyntax>().Select(r => r.Expression).FirstOrDefault(e => e != null)
-                as ExpressionSyntax;
-        if (bodyExpr == null)
-        {
-            return;
-        }
-        var symbol = semanticModel.GetSymbolInfo(bodyExpr).Symbol;
-        if (symbol == null && bodyExpr is MemberAccessExpressionSyntax mae)
-            symbol = semanticModel.GetSymbolInfo(mae.Name).Symbol;
-        if (symbol == null && bodyExpr is InvocationExpressionSyntax inv)
-            symbol = semanticModel.GetSymbolInfo(inv.Expression).Symbol;
+
+        var symbol =
+            semanticModel.GetSymbolInfo(bodyExpr).Symbol
+            ?? bodyExpr switch
+            {
+                MemberAccessExpressionSyntax m => semanticModel.GetSymbolInfo(m.Name).Symbol,
+                InvocationExpressionSyntax inv => semanticModel.GetSymbolInfo(inv.Expression).Symbol,
+                _ => null,
+            };
+
         if (symbol is not (IPropertySymbol or IFieldSymbol or IMethodSymbol))
         {
             return;
         }
+
+        // Probeer een MockableSpec (definitie voor een mock) te maken op basis van het gevonden symbool.
         var spec = MockableSpec.TryCreate(symbol);
         if (spec == null)
         {
             return;
         }
+
+        // Bepaal de basisnaam voor het dependency-lid.
         var baseName = spec.DependencyMemberName;
         var finalName = baseName;
         int i = 1;
+
+        // Voorkom dubbele namen in de lijst: als de naam al bestaat, voeg een nummer toe (bijv. _1, _2).
         while (mockables.Any(m => string.Equals(m.DependencyMemberName, finalName, StringComparison.Ordinal)))
         {
             finalName = $"{baseName}_{i}";
             i++;
         }
+
+        // Voeg de specificatie toe aan de lijst met de (unieke) naam.
         mockables.Add(spec with { DependencyMemberName = finalName });
     }
 }
