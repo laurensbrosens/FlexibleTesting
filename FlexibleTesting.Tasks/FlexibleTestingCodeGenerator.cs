@@ -220,17 +220,31 @@ public class FlexibleTestingCodeGenerator
         var className = $"{oldName}Base_G";
         var members = new List<MemberDeclarationSyntax>();
 
-        var ctorPars = new[]
+        var originalCtor = baseType.Constructors.OrderByDescending(c => c.Parameters.Length).FirstOrDefault();
+        var ctorPars = new List<SyntaxNode>();
+        var baseArgs = new List<SyntaxNode>();
+
+        if (originalCtor != null)
         {
-            gen.ParameterDeclaration(
-                "someDataObject",
-                gen.IdentifierName(baseType.Constructors.FirstOrDefault()?.Parameters.FirstOrDefault()?.Type.Name ?? "SomeDataObject")
-            ),
-            gen.ParameterDeclaration("baseDependencies", gen.IdentifierName(baseDepsInterfaceName)),
-        };
+            foreach (var p in originalCtor.Parameters)
+            {
+                ctorPars.Add(gen.ParameterDeclaration(p.Name, GetTypeNameSyntax(p.Type)));
+                baseArgs.Add(gen.IdentifierName(p.Name));
+            }
+        }
+        ctorPars.Add(gen.ParameterDeclaration("baseDependencies", gen.IdentifierName(baseDepsInterfaceName)));
+
         var ctor = (ConstructorDeclarationSyntax)
-            gen.ConstructorDeclaration(className, parameters: ctorPars, accessibility: Accessibility.Public);
-        members.Add(ctor.WithBody(SyntaxFactory.Block(SyntaxFactory.ParseStatement("_baseDependencies = baseDependencies;"))));
+            gen.ConstructorDeclaration(
+                className,
+                parameters: ctorPars,
+                accessibility: Accessibility.Public
+            );
+
+        var bodyStatements = new List<StatementSyntax>();
+        bodyStatements.Add(SyntaxFactory.ParseStatement("_baseDependencies = baseDependencies;"));
+        
+        members.Add(ctor.WithBody(SyntaxFactory.Block(bodyStatements)));
 
         members.Add(
             (FieldDeclarationSyntax)

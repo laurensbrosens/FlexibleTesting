@@ -37,11 +37,9 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         var updatedNode = rewrittenNode.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
 
         var dependenciesParamName = instructions.DependenciesParameterName;
-        if (updatedNode.ParameterList.Parameters.Any(p => p.Identifier.Text == dependenciesParamName))
-            dependenciesParamName += "2";
-
         var dependenciesParam = (ParameterSyntax)
             generator.ParameterDeclaration(dependenciesParamName, generator.IdentifierName(instructions.DependenciesInterfaceName));
+        
         var dependenciesAssignment = (StatementSyntax)
             generator.ExpressionStatement(
                 generator.AssignmentStatement(
@@ -56,9 +54,6 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         if (instructions.MockInheritance)
         {
             var baseDepsParamName = "baseDependencies";
-            if (updatedNode.ParameterList.Parameters.Any(p => p.Identifier.Text == baseDepsParamName))
-                baseDepsParamName += "2";
-
             var baseDepsParam = (ParameterSyntax)
                 generator.ParameterDeclaration(
                     baseDepsParamName,
@@ -72,6 +67,13 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
                 );
                 updatedNode = updatedNode.WithInitializer(
                     updatedNode.Initializer.WithArgumentList(updatedNode.Initializer.ArgumentList.WithArguments(baseArgs))
+                );
+            }
+            else
+            {
+                updatedNode = updatedNode.WithInitializer(
+                    SyntaxFactory.ConstructorInitializer(SyntaxKind.BaseConstructorInitializer, 
+                        SyntaxFactory.ArgumentList(SyntaxFactory.SingletonSeparatedList(SyntaxFactory.Argument(SyntaxFactory.IdentifierName(baseDepsParamName)))))
                 );
             }
 
