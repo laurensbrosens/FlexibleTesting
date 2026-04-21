@@ -1,9 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using FlexibleTestingDomain;
 using Microsoft.Build.Framework;
 using Microsoft.CodeAnalysis;
@@ -11,6 +5,12 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.MSBuild;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace FlexibleTesting.Tasks;
 
@@ -66,7 +66,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }
     }
 
-    private void FindBuilders(Project legacyProject, Compilation? legacyComp, Compilation testComp)
+    private void FindBuilders(Project legacyProject, Compilation legacyComp, Compilation testComp)
     {
         var targetSymbol = testComp.GetTypeByMetadataName(typeof(GeneratorInstructionsAttribute).FullName!);
 
@@ -77,22 +77,20 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 .DescendantNodes()
                 .OfType<ClassDeclarationSyntax>()
                 .Select(node => (node, model, symbol: model.GetDeclaredSymbol(node)))
-                .Where(t =>
-                    t.symbol?.GetAttributes().Any(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, targetSymbol)) == true
-                );
+                .Where(t => t.symbol?.GetAttributes().Any(a => a.AttributeClass?.IsEqualToSymbol(targetSymbol) ?? false) == true);
         });
 
-        foreach (var (node, model, _) in builders)
+        foreach (var (node, builderSemanticModel, _) in builders)
         {
-            GenerateForFlexibleTesting(legacyProject, testComp, legacyComp, model, node);
+            GenerateForFlexibleTesting(legacyProject, testComp, legacyComp, builderSemanticModel, node);
         }
     }
 
     private void GenerateForFlexibleTesting(
         Project project,
         Compilation testCompilation,
-        Compilation? legacyCompilation,
-        SemanticModel semanticModelB,
+        Compilation legacyCompilation,
+        SemanticModel builderSemanticModel,
         ClassDeclarationSyntax classNode
     )
     {
@@ -105,21 +103,32 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             return;
         }
 
-        var methodsToMakePublicFromTest = new List<IMethodSymbol>();
+        var methodsToMakePublicFromTest = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         var mockablesFromTest = new List<MockableSpec>();
         INamedTypeSymbol? targetTypeFromTest = null;
         var mockInheritanceFromTest = false;
 
-        var overwritesSymbol = semanticModelB.Compilation.GetTypeByMetadataName(typeof(Overwrites).FullName!);
+        // Haalt het symbool op voor de 'Overwrites' klasse om types te kunnen vergelijken
+        var overwritesSymbol = builderSemanticModel.Compilation.GetTypeByMetadataName(typeof(Overwrites).FullName!);
+
+        // Vindt alle methode-aanroepen binnen de Configure() body, zoals 'Overwrites.Mock<UserService>()'
         var invocations = configureMethod.Body.DescendantNodes().OfType<InvocationExpressionSyntax>();
 
         foreach (var invocation in invocations)
         {
-            if (
-                semanticModelB.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol
-                || !SymbolEqualityComparer.Default.Equals(methodSymbol.ContainingType, overwritesSymbol)
-            )
+            // Probeert de semantische betekenis van de aanroep te achterhalen (bijv. welke specifieke 'Mock' overload wordt gebruikt)
+            if (builderSemanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol)
+            {
+                // Slaat de aanroep over als het symbool niet gevonden kan worden (bijv. bij compileerfouten)
                 continue;
+            }
+
+            // Vanaf hier kun je 'methodSymbol' gebruiken om te checken of de aanroep
+            // afkomstig is van de 'overwritesSymbol' klasse en welke actie de Generator moet ondernemen.
+            if (!methodSymbol.IsDeclaredIn(overwritesSymbol))
+            {
+                continue;
+            }
 
             switch (methodSymbol.Name)
             {
@@ -128,11 +137,11 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     break;
 
                 case nameof(Overwrites.MakePublic):
-                    AddToMakePublic(semanticModelB, methodsToMakePublicFromTest, invocation);
+                    AddToMakePublic(builderSemanticModel, methodsToMakePublicFromTest, invocation);
                     break;
 
                 case nameof(Overwrites.Mockable):
-                    AddToMockable(semanticModelB, mockablesFromTest, invocation);
+                    AddToMockable(builderSemanticModel, mockablesFromTest, invocation);
                     break;
 
                 case nameof(Overwrites.MockInheritance):
@@ -214,7 +223,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     {
                         baseMethod = baseMethod.OverriddenMethod;
                     }
-                    if (baseMethod != null && !methodsToMakePublicFromTest.Contains(baseMethod, SymbolEqualityComparer.Default))
+
+                    if (baseMethod != null)
                     {
                         methodsToMakePublicFromTest.Add(baseMethod);
                     }
@@ -1398,7 +1408,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return (iface).WithLeadingTrivia(SyntaxFactory.TriviaList(comment));
     }
 
-    private static List<IMethodSymbol> MapMethodsToLegacy(INamedTypeSymbol legacyType, List<IMethodSymbol> methodsFromTest)
+    private static List<IMethodSymbol> MapMethodsToLegacy(INamedTypeSymbol legacyType, HashSet<IMethodSymbol> methodsFromTest)
     {
         var legacyMethods = legacyType.GetMembers().OfType<IMethodSymbol>().ToList();
         var result = new List<IMethodSymbol>();
@@ -1444,7 +1454,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
     private void AddToMakePublic(
         SemanticModel semanticModel,
-        List<IMethodSymbol> methodsToMakePublic,
+        HashSet<IMethodSymbol> methodsToMakePublic,
         InvocationExpressionSyntax invocation
     )
     {
