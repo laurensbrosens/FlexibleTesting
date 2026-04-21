@@ -142,7 +142,7 @@ public class UserViewModelTests
         baseDeps.ClearReceivedCalls();
 
         // Act
-        //vm.OnPropertyChanged("TestProperty");
+        vm.OnPropertyChanged("TestProperty");
 
         // Assert
         baseDeps.Received(1).OnPropertyChanged("TestProperty");
