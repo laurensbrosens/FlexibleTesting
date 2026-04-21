@@ -17,6 +17,10 @@ namespace FlexibleTesting.Tasks;
 // Usefull info about someone who does something similar (he mocks the mocks to make them compile time instead of runtime): https://github.com/dotnet/roslyn/issues/4974
 public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 {
+    private static readonly SymbolDisplayFormat FullFormat = SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(
+        SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier
+    );
+
     /// <summary>
     /// Default output path is e.g., ..\TestProject\Generated
     /// </summary>
@@ -116,15 +120,22 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             return;
         }
 
-        var methodsToMakePublicFromTest = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        var mockablesFromTest = new List<MockableSpec>();
-        INamedTypeSymbol? targetTypeFromTest = null;
-        var mockInheritanceFromTest = false;
+        var instructions = new FlexibleTestingInstructions
+        {
+            TargetType = null!, // Will be set below
+            OldClassName = string.Empty, // Will be set below
+            NewClassName = string.Empty, // Will be set below
+            DependenciesInterfaceName = string.Empty, // Will be set below
+            DependenciesFieldName = "_dependencies",
+            DependenciesParameterName = "dependencies"
+        };
 
         var overwritesSymbol = builderSemanticModel.Compilation.GetTypeByMetadataName(typeof(Overwrites).FullName!);
 
         // All method calls inside the Configure() body, like 'Overwrites.Mock<UserService>()'
         var allInstructionMethods = configureMethod.Body.DescendantNodes().OfType<InvocationExpressionSyntax>();
+
+        INamedTypeSymbol? targetTypeFromTest = null;
 
         foreach (var instructionMethod in allInstructionMethods)
         {
@@ -146,15 +157,15 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     break;
 
                 case nameof(Overwrites.MakePublic):
-                    AddToMakePublic(builderSemanticModel, methodsToMakePublicFromTest, instructionMethod);
+                    AddToMakePublic(builderSemanticModel, instructions.MethodsToMakePublic, instructionMethod);
                     break;
 
                 case nameof(Overwrites.Mockable):
-                    AddToMockable(builderSemanticModel, mockablesFromTest, instructionMethod);
+                    AddToMockable(builderSemanticModel, instructions, instructionMethod);
                     break;
 
                 case nameof(Overwrites.MockInheritance):
-                    mockInheritanceFromTest = true;
+                    instructions.MockInheritance = true;
                     break;
 
                 case nameof(Overwrites.Mock):
@@ -177,74 +188,48 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             return;
         }
 
-        var typeSyntaxRef = targetTypeInLegacy.DeclaringSyntaxReferences.FirstOrDefault();
-        if (typeSyntaxRef == null)
+        var typeSyntaxReference = targetTypeInLegacy.DeclaringSyntaxReferences.FirstOrDefault();
+        if (typeSyntaxReference == null)
         {
             return;
         }
 
-        if (typeSyntaxRef.GetSyntax() is not ClassDeclarationSyntax targetClassNode)
+        if (typeSyntaxReference.GetSyntax() is not ClassDeclarationSyntax targetClassNode)
         {
             return;
         }
 
         // For each mockable method, also add it to methodsToMakePublic so it becomes public
-        foreach (var mockable in mockablesFromTest.Where(mockableSpec => mockableSpec.Kind == MockableKind.Method))
+        foreach (var mockableMethodFromTest in instructions.MockableMethods)
         {
-            // Find the method in the target type from the test compilation
-            var mockableMethod = targetTypeFromTest
-                .GetMembers(mockable.MemberName)
-                .OfType<IMethodSymbol>()
-                .FirstOrDefault(methodSymbol => methodSymbol.ContainingType?.Name == mockable.ContainingTypeSimpleName);
+            instructions.MethodsToMakePublic.Add(mockableMethodFromTest);
 
-            // If not found in the target type, search in base types
-            if (mockableMethod == null)
+            // Also add the base definition if this is an override
+            var originalDefinition = mockableMethodFromTest.OriginalDefinition;
+            if (mockableMethodFromTest.IsOverride && originalDefinition.OverriddenMethod != null)
             {
-                var currentType = targetTypeFromTest.BaseType;
-                while (currentType != null && currentType.SpecialType != SpecialType.System_Object)
+                var baseMethod = mockableMethodFromTest.OverriddenMethod;
+                while (baseMethod?.IsOverride == true && baseMethod.OverriddenMethod != null)
                 {
-                    mockableMethod = currentType
-                        .GetMembers(mockable.MemberName)
-                        .OfType<IMethodSymbol>()
-                        .FirstOrDefault(methodSymbol => methodSymbol.ContainingType?.Name == mockable.ContainingTypeSimpleName);
-
-                    if (mockableMethod != null)
-                    {
-                        break;
-                    }
-
-                    currentType = currentType.BaseType;
+                    baseMethod = baseMethod.OverriddenMethod;
                 }
-            }
 
-            if (mockableMethod != null)
-            {
-                methodsToMakePublicFromTest.Add(mockableMethod);
-
-                // Also add the base definition if this is an override
-                var originalDefinition = mockableMethod.OriginalDefinition;
-                if (mockableMethod.IsOverride && originalDefinition.OverriddenMethod != null)
+                if (baseMethod != null)
                 {
-                    var baseMethod = mockableMethod.OverriddenMethod;
-                    while (baseMethod?.IsOverride == true && baseMethod.OverriddenMethod != null)
-                    {
-                        baseMethod = baseMethod.OverriddenMethod;
-                    }
-
-                    if (baseMethod != null)
-                    {
-                        methodsToMakePublicFromTest.Add(baseMethod);
-                    }
+                    instructions.MethodsToMakePublic.Add(baseMethod);
                 }
             }
         }
 
-        // IMPORTANT: symbols from testCompilation won't match symbols from legacyCompilation,
-        // so map methods-to-make-public by signature.
-        var methodsToMakePublicInLegacy = MapMethodsToLegacy(targetTypeInLegacy, methodsToMakePublicFromTest);
-
         var oldName = targetClassNode.Identifier.Text;
-        var newName = $"{oldName}_G";
+        
+        instructions.TargetType = targetTypeInLegacy;
+        instructions.OldClassName = oldName;
+        instructions.NewClassName = $"{oldName}_G";
+        instructions.DependenciesInterfaceName = $"IAuto{oldName}Dependencies";
+
+        // Map methods to legacy compilation symbols
+        MapMethodsToLegacy(instructions, legacyCompilation);
 
         var document = project.GetDocument(targetClassNode.SyntaxTree);
         if (document == null)
@@ -252,33 +237,23 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             return;
         }
 
-        var instructions = new FlexibleTestingInstructions(
-            TargetType: targetTypeInLegacy,
-            OldClassName: oldName,
-            NewClassName: newName,
-            MethodsToMakePublic: methodsToMakePublicInLegacy,
-            Mockables: mockablesFromTest,
-            DependenciesInterfaceName: $"IAuto{oldName}Dependencies",
-            DependenciesFieldName: "_dependencies",
-            DependenciesParameterName: "dependencies",
-            MockInheritance: mockInheritanceFromTest
-        );
-
         var rewrittenDocument = ApplyRewritesAsync(document, targetClassNode, instructions).GetAwaiter().GetResult();
-        var newRoot = rewrittenDocument.GetSyntaxRootAsync().GetAwaiter().GetResult();
+        var newSyntaxRoot = rewrittenDocument.GetSyntaxRootAsync().GetAwaiter().GetResult();
 
-        var normalized = newRoot!.NormalizeWhitespace(elasticTrivia: true).ToFullString();
+        var normalizedCode = newSyntaxRoot!.NormalizeWhitespace(elasticTrivia: true).ToFullString();
 
-        var result = $"""
+        var finalResult = $"""
 // <auto-generated/>
-{normalized}
+{normalizedCode}
 """;
 
-        Directory.CreateDirectory(OutputPath);
-        var fileName = $"{oldName}_G.g.cs";
-        var fullPath = Path.Combine(OutputPath, fileName);
-
-        File.WriteAllText(fullPath, result, Encoding.UTF8);
+        if (!string.IsNullOrWhiteSpace(OutputPath))
+        {
+            Directory.CreateDirectory(OutputPath);
+            var fileName = $"{oldName}_G.g.cs";
+            var fullPath = Path.Combine(OutputPath, fileName);
+            File.WriteAllText(fullPath, finalResult, Encoding.UTF8);
+        }
     }
 
     private async Task<Document> ApplyRewritesAsync(
@@ -297,7 +272,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }
 
         bool needsCallerMemberName = false;
-        var constructors = classNode.Members.OfType<ConstructorDeclarationSyntax>().ToList();
 
         // Pre-extract method symbols from the original semantic model before any editor operations
         // This avoids "Syntax node is not within syntax tree" errors inside ReplaceNode callbacks
@@ -382,7 +356,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                         var methodSymbol = methodSymbolsMap.TryGetValue(key, out var symbol) ? symbol : null;
                         MemberDeclarationSyntax updatedMethod = methodDeclaration;
 
-                        if (methodSymbol != null && instructions.MethodsToMakePublic.Any(m => SymbolsMatch(m, methodSymbol)))
+                        if (methodSymbol != null && instructions.MethodsToMakePublic.Contains(methodSymbol))
                         {
                             updatedMethod = MakeMethodPublic((MethodDeclarationSyntax)updatedMethod);
                         }
@@ -850,7 +824,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     }
 
     private SyntaxNode ReplaceMockablesInNode(
-        SyntaxNode node,
+        SyntaxNode syntaxNode,
         SyntaxGenerator generator,
         SemanticModel semanticModel,
         FlexibleTestingInstructions instructions,
@@ -858,39 +832,41 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     )
     {
         // Build a list of replacements with tracking of node positions to handle stale references
-        var replacements = new List<(SyntaxNode OldNode, SyntaxNode NewNode)>();
+        var memberReplacements = new List<(SyntaxNode OldNode, SyntaxNode NewNode)>();
 
         // FIX: Gebruik DescendantNodesAndSelf en zorg dat we diep genoeg graven (ook in accessors van properties)
-        var descendantNodes = node.DescendantNodesAndSelf()
-            .Where(descendantNode => descendantNode is InvocationExpressionSyntax or MemberAccessExpressionSyntax or AccessorDeclarationSyntax)
+        var descendantNodes = syntaxNode.DescendantNodesAndSelf()
+            .Where(node => node is InvocationExpressionSyntax or MemberAccessExpressionSyntax or AccessorDeclarationSyntax)
             .ToList();
 
-        var nodesToReplaceWithSpecs = new List<(SyntaxNode Node, MockableSpec Spec)>();
+        var nodesToReplaceWithSymbols = new List<(SyntaxNode Node, ISymbol Symbol)>();
 
-        foreach (var descendantNode in descendantNodes)
+        foreach (var node in descendantNodes)
         {
-            var mockableSpec = GetMockableSpecForNode(descendantNode, semanticModel, instructions.Mockables);
-            if (mockableSpec != null)
+            var symbol = GetMockableSymbolForNode(node, semanticModel, instructions);
+            if (symbol != null)
             {
-                nodesToReplaceWithSpecs.Add((descendantNode, mockableSpec));
+                nodesToReplaceWithSymbols.Add((node, symbol));
             }
         }
 
         // Highest-node-only to avoid double-replacing (e.g. Guid.NewGuid() vs Guid.NewGuid)
-        var finalNodesToReplace = nodesToReplaceWithSpecs
-            .Where(nodeWithSpec => !nodesToReplaceWithSpecs.Any(otherNodeWithSpec => nodeWithSpec.Node != otherNodeWithSpec.Node && nodeWithSpec.Node.Ancestors().Contains(otherNodeWithSpec.Node)))
+        var finalNodesToReplace = nodesToReplaceWithSymbols
+            .Where(nodeWithSymbol => !nodesToReplaceWithSymbols.Any(otherNodeWithSymbol => nodeWithSymbol.Node != otherNodeWithSymbol.Node && nodeWithSymbol.Node.Ancestors().Contains(otherNodeWithSymbol.Node)))
             .ToList();
 
         // Build all replacements first, then apply them with ReplaceNodes to avoid stale references
-        foreach (var (nodeToReplace, mockableSpec) in finalNodesToReplace)
+        foreach (var (nodeToReplace, memberSymbol) in finalNodesToReplace)
         {
-            if (mockableSpec.Parameters.Any(parameter => parameter.HasCallerMemberNameAttribute))
+            if (memberSymbol is IMethodSymbol methodSymbol && methodSymbol.Parameters.Any(p => p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute")))
             {
                 needsCallerMemberName = true;
             }
 
+            var dependencyMemberName = instructions.DependencyMemberNames[memberSymbol];
+
             SyntaxNode replacementNode;
-            if (mockableSpec.Kind == MockableKind.Method)
+            if (memberSymbol is IMethodSymbol)
             {
                 var invocationArguments = nodeToReplace is InvocationExpressionSyntax invocationExpression
                     ? invocationExpression.ArgumentList.Arguments.Select(argument => argument.Expression)
@@ -899,7 +875,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 replacementNode = generator.InvocationExpression(
                     generator.MemberAccessExpression(
                         generator.IdentifierName(instructions.DependenciesFieldName),
-                        mockableSpec.DependencyMemberName
+                        dependencyMemberName
                     ),
                     invocationArguments
                 );
@@ -909,52 +885,62 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 replacementNode = generator.InvocationExpression(
                     generator.MemberAccessExpression(
                         generator.IdentifierName(instructions.DependenciesFieldName),
-                        mockableSpec.DependencyMemberName
+                        dependencyMemberName
                     )
                 );
             }
 
-            replacements.Add((nodeToReplace, replacementNode.WithTriviaFrom(nodeToReplace)));
+            memberReplacements.Add((nodeToReplace, replacementNode.WithTriviaFrom(nodeToReplace)));
         }
 
         // Apply all replacements at once using ReplaceNodes to avoid stale node references
-        if (replacements.Count > 0)
+        if (memberReplacements.Count > 0)
         {
-            var replacementDictionary = replacements.ToDictionary(replacement => replacement.OldNode, replacement => replacement.NewNode);
-            var resultNode = node.ReplaceNodes(replacementDictionary.Keys, (oldNode, _) => replacementDictionary[oldNode]);
+            var replacementDictionary = memberReplacements.ToDictionary(replacement => replacement.OldNode, replacement => replacement.NewNode);
+            var resultNode = syntaxNode.ReplaceNodes(replacementDictionary.Keys, (oldNode, _) => replacementDictionary[oldNode]);
             return resultNode;
         }
 
-        return node;
+        return syntaxNode;
     }
 
-    private static bool SymbolsMatch(ISymbol? a, ISymbol? b)
+    private static ISymbol? GetMockableSymbolForNode(SyntaxNode syntaxNode, SemanticModel semanticModel, FlexibleTestingInstructions instructions)
     {
-        if (a == null || b == null)
-            return false;
-        if (a.Name != b.Name)
-            return false;
+        // Probeer direct het symbool op te halen voor de node
+        var symbol = semanticModel.GetSymbolInfo(syntaxNode).Symbol;
 
-        if (a is IMethodSymbol ma && b is IMethodSymbol mb)
+        // Als dat niet lukt, kijk specifiek naar de naam van de member access
+        if (symbol == null && syntaxNode is MemberAccessExpressionSyntax memberAccessExpression)
         {
-            if (ma.Parameters.Length != mb.Parameters.Length)
-                return false;
-            for (int i = 0; i < ma.Parameters.Length; i++)
-            {
-                if (ma.Parameters[i].Type.ToDisplayString() != mb.Parameters[i].Type.ToDisplayString())
-                    return false;
-            }
-            return true;
+            symbol = semanticModel.GetSymbolInfo(memberAccessExpression.Name).Symbol;
         }
-        return false;
+
+        // Voor method calls: check de expressie (bijv. de methode-naam voor de haakjes)
+        if (symbol == null && syntaxNode is InvocationExpressionSyntax invocationExpression)
+        {
+            symbol = semanticModel.GetSymbolInfo(invocationExpression.Expression).Symbol;
+        }
+
+        // Als het een property is, vallen getters/setters onder IPropertySymbol
+        if (symbol is IPropertySymbol or IFieldSymbol or IMethodSymbol)
+        {
+            return instructions.AllMockables.FirstOrDefault(mockableSymbol => SymbolSignatureComparer.Default.Equals(mockableSymbol, symbol));
+        }
+
+        return null;
     }
 
-    private static MethodDeclarationSyntax MakeMethodPublic(MethodDeclarationSyntax method)
+    private static bool SymbolsMatch(ISymbol? symbolA, ISymbol? symbolB)
+    {
+        return SymbolSignatureComparer.Default.Equals(symbolA, symbolB);
+    }
+
+    private static MethodDeclarationSyntax MakeMethodPublic(MethodDeclarationSyntax methodDeclaration)
     {
         // Remove existing accessibility modifiers (protected, private, internal, etc.)
-        var modifiers = method
-            .Modifiers.Where(m =>
-                m.Kind()
+        var modifiers = methodDeclaration
+            .Modifiers.Where(modifier =>
+                modifier.Kind()
                     is not SyntaxKind.ProtectedKeyword
                         and not SyntaxKind.PrivateKeyword
                         and not SyntaxKind.InternalKeyword
@@ -964,47 +950,24 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
         // Remove the override modifier as we're converting this to a public method
         // that shouldn't override the base (the base will also be made public)
-        modifiers = modifiers.Where(m => m.Kind() != SyntaxKind.OverrideKeyword).ToList();
+        modifiers = modifiers.Where(modifier => modifier.Kind() != SyntaxKind.OverrideKeyword).ToList();
 
         // Add public modifier at the beginning
         modifiers.Insert(0, SyntaxFactory.Token(SyntaxKind.PublicKeyword));
 
-        return method.WithModifiers(SyntaxFactory.TokenList(modifiers));
+        return methodDeclaration.WithModifiers(SyntaxFactory.TokenList(modifiers));
     }
 
-    private static string GetMethodSignature(IMethodSymbol symbol)
+    private static string GetMethodSignature(IMethodSymbol methodSymbol)
     {
-        var paramTypes = string.Join(",", symbol.Parameters.Select(p => p.Type.ToDisplayString()));
-        return $"{paramTypes}";
+        var parameterTypes = string.Join(",", methodSymbol.Parameters.Select(parameter => parameter.Type.ToDisplayString()));
+        return $"{parameterTypes}";
     }
 
-    private static string GetMethodSignatureFromSyntax(MethodDeclarationSyntax method)
+    private static string GetMethodSignatureFromSyntax(MethodDeclarationSyntax methodDeclaration)
     {
-        var paramTypes = string.Join(",", method.ParameterList.Parameters.Select(p => p.Type?.ToString() ?? ""));
-        return $"{paramTypes}";
-    }
-
-    private static MockableSpec? GetMockableSpecForNode(SyntaxNode node, SemanticModel semanticModel, IReadOnlyList<MockableSpec> mockables)
-    {
-        // Probeer direct het symbool op te halen voor de node
-        var symbol = semanticModel.GetSymbolInfo(node).Symbol;
-
-        // Als dat niet lukt, kijk specifiek naar de naam van de member access
-        if (symbol == null && node is MemberAccessExpressionSyntax mae)
-            symbol = semanticModel.GetSymbolInfo(mae.Name).Symbol;
-
-        // Voor method calls: check de expressie (bijv. de methode-naam voor de haakjes)
-        if (symbol == null && node is InvocationExpressionSyntax inv)
-            symbol = semanticModel.GetSymbolInfo(inv.Expression).Symbol;
-
-        // Als het een property is, vallen getters/setters onder IPropertySymbol
-        if (symbol is IPropertySymbol || symbol is IMethodSymbol)
-        {
-            var fullQualifiedName = symbol.ContainingType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-            return mockables.FirstOrDefault(m => m.MemberName == symbol.Name && m.ContainingTypeFullName == fullQualifiedName);
-        }
-
-        return null;
+        var parameterTypes = string.Join(",", methodDeclaration.ParameterList.Parameters.Select(parameter => parameter.Type?.ToString() ?? string.Empty));
+        return $"{parameterTypes}";
     }
 
     private static List<ISymbol> ExtractUsedBaseMembers(
@@ -1062,38 +1025,40 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     {
         var members = new List<SyntaxNode>();
 
-        foreach (var mockableSpec in instructions.Mockables)
+        foreach (var mockableSymbol in instructions.AllMockables)
         {
-            if (mockableSpec.Kind == MockableKind.Method)
+            var dependencyMemberName = instructions.DependencyMemberNames[mockableSymbol];
+
+            if (mockableSymbol is IMethodSymbol methodSymbol)
             {
-                var methodParameters = mockableSpec.Parameters.Select(parameterSpec =>
+                var methodParameters = methodSymbol.Parameters.Select(parameterSymbol =>
                 {
-                    var parameterDeclaration = generator.ParameterDeclaration(parameterSpec.Name, generator.IdentifierName(parameterSpec.TypeDisplay));
-                    if (parameterSpec.HasCallerMemberNameAttribute)
+                    var parameterDeclaration = generator.ParameterDeclaration(parameterSymbol.Name, generator.IdentifierName(parameterSymbol.Type.ToDisplayString()));
+                    if (parameterSymbol.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute"))
                     {
                         parameterDeclaration = generator.AddAttributes(parameterDeclaration, generator.Attribute("CallerMemberName"));
                     }
-                    if (parameterSpec.HasExplicitDefaultValue)
+                    if (parameterSymbol.HasExplicitDefaultValue)
                     {
                         parameterDeclaration = ((ParameterSyntax)parameterDeclaration).WithDefault(
-                            SyntaxFactory.EqualsValueClause((ExpressionSyntax)generator.LiteralExpression(parameterSpec.ExplicitDefaultValue))
+                            SyntaxFactory.EqualsValueClause((ExpressionSyntax)generator.LiteralExpression(parameterSymbol.ExplicitDefaultValue))
                         );
                     }
                     return parameterDeclaration;
                 });
 
                 SyntaxNode returnTypeNode;
-                if (string.IsNullOrWhiteSpace(mockableSpec.ReturnTypeDisplay) || mockableSpec.ReturnTypeDisplay == typeof(void).FullName || mockableSpec.ReturnTypeDisplay == "void")
+                if (methodSymbol.ReturnType.SpecialType == SpecialType.System_Void)
                 {
                     returnTypeNode = SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.VoidKeyword));
                 }
                 else
                 {
-                    returnTypeNode = generator.IdentifierName(mockableSpec.ReturnTypeDisplay);
+                    returnTypeNode = generator.IdentifierName(methodSymbol.ReturnType.ToDisplayString());
                 }
 
                 var methodDeclaration = generator.MethodDeclaration(
-                    mockableSpec.DependencyMemberName,
+                    dependencyMemberName,
                     parameters: methodParameters,
                     returnType: returnTypeNode,
                     accessibility: Accessibility.Public
@@ -1103,8 +1068,8 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             else
             {
                 var propertyDeclaration = generator.PropertyDeclaration(
-                    mockableSpec.DependencyMemberName,
-                    generator.IdentifierName(mockableSpec.DelegateTypeDisplay),
+                    dependencyMemberName,
+                    generator.IdentifierName(MockableHelper_GetDelegateTypeDisplay(mockableSymbol)),
                     accessibility: Accessibility.Public,
                     getAccessorStatements: null
                 );
@@ -1122,6 +1087,29 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return interfaceDeclaration.WithLeadingTrivia(SyntaxFactory.TriviaList(documentationComment));
     }
 
+    private static string MockableHelper_GetDelegateTypeDisplay(ISymbol symbol)
+    {
+        var (type, parameters) = symbol switch
+        {
+            IPropertySymbol propertySymbol => (propertySymbol.Type, Array.Empty<IParameterSymbol>()),
+            IFieldSymbol fieldSymbol => (fieldSymbol.Type, Array.Empty<IParameterSymbol>()),
+            IMethodSymbol methodSymbol => (methodSymbol.ReturnType, methodSymbol.Parameters.ToArray()),
+            _ => throw new ArgumentException("Unsupported symbol kind", nameof(symbol)),
+        };
+
+        var isVoid = type.SpecialType == SpecialType.System_Void;
+        var paramTypes = parameters.Select(p => p.Type).ToList();
+        var types = isVoid ? paramTypes : paramTypes.Concat(new[] { type });
+        var typeList = string.Join(", ", types.Select(t => t.ToDisplayString(FullFormat)));
+
+        return (isVoid, paramTypes.Count) switch
+        {
+            (true, 0) => "global::System.Action",
+            (true, _) => $"global::System.Action<{typeList}>",
+            (false, _) => $"global::System.Func<{typeList}>",
+        };
+    }
+
     private static SyntaxNode BuildBaseClassReplacement(
         SyntaxGenerator generator,
         string derivedClassName,
@@ -1129,7 +1117,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         List<ISymbol> usedMembers,
         string baseDependenciesInterfaceName,
         string dependenciesFieldName,
-        IReadOnlyList<IMethodSymbol> methodsToMakePublic
+        HashSet<IMethodSymbol> methodsToMakePublic
     )
     {
         var baseClassName = $"{derivedClassName}Base_G";
@@ -1174,7 +1162,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         {
             if (member is IMethodSymbol methodSymbol && methodSymbol.MethodKind != MethodKind.Constructor)
             {
-                var shouldBePublic = methodsToMakePublic.Any(methodToMakePublic => SymbolsMatch(methodToMakePublic, methodSymbol));
+                var shouldBePublic = methodsToMakePublic.Contains(methodSymbol);
                 var methodStub = CreateBaseMethodStub(
                     generator,
                     methodSymbol,
@@ -1441,14 +1429,33 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         return interfaceDeclaration.WithLeadingTrivia(SyntaxFactory.TriviaList(documentationComment));
     }
 
-    private static List<IMethodSymbol> MapMethodsToLegacy(INamedTypeSymbol legacyTypeSymbol, HashSet<IMethodSymbol> methodsFromTest)
+    private static void MapMethodsToLegacy(FlexibleTestingInstructions instructions, Compilation legacyCompilation)
+    {
+        // 1. Map MethodsToMakePublic
+        var methodsToMakePublicInLegacy = MapMethodsToLegacy(instructions.TargetType, instructions.MethodsToMakePublic);
+        instructions.MethodsToMakePublic.Clear();
+        foreach (var method in methodsToMakePublicInLegacy)
+        {
+            instructions.MethodsToMakePublic.Add(method);
+        }
+
+        // 2. Map MockableMethods, MockableProperties, MockableFields
+        // Since they are from testCompilation, we need source symbols from legacyCompilation
+        // However, for static calls like DateTime.Now, we use the original symbol.
+        // For source symbols, we re-resolve them.
+        
+        // This is complex, but the original code just used the symbols from testCompilation
+        // except for targetType. Let's keep it simple for now and only map what's necessary.
+    }
+
+    private static List<IMethodSymbol> MapMethodsToLegacy(INamedTypeSymbol legacyTypeSymbol, IEnumerable<IMethodSymbol> methodsFromTest)
     {
         var legacyMethods = legacyTypeSymbol.GetMembers().OfType<IMethodSymbol>().ToList();
         var result = new List<IMethodSymbol>();
 
         foreach (var methodFromTest in methodsFromTest)
         {
-            var match = legacyMethods.FirstOrDefault(legacyMethod => SymbolsMatch(legacyMethod, methodFromTest));
+            var match = legacyMethods.FirstOrDefault(legacyMethod => SymbolSignatureComparer.Default.Equals(legacyMethod, methodFromTest));
             if (match != null)
             {
                 result.Add(match);
@@ -1460,7 +1467,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                 var currentBaseType = legacyTypeSymbol.BaseType;
                 while (currentBaseType != null && currentBaseType.SpecialType != SpecialType.System_Object)
                 {
-                    var baseMatch = currentBaseType.GetMembers().OfType<IMethodSymbol>().FirstOrDefault(legacyMethod => SymbolsMatch(legacyMethod, methodFromTest));
+                    var baseMatch = currentBaseType.GetMembers().OfType<IMethodSymbol>().FirstOrDefault(legacyMethod => SymbolSignatureComparer.Default.Equals(legacyMethod, methodFromTest));
                     if (baseMatch != null)
                     {
                         result.Add(baseMatch);
@@ -1510,7 +1517,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }
     }
 
-    private void AddToMockable(SemanticModel semanticModel, List<MockableSpec> mockables, InvocationExpressionSyntax invocationExpression)
+    private void AddToMockable(SemanticModel semanticModel, FlexibleTestingInstructions instructions, InvocationExpressionSyntax invocationExpression)
     {
         if (invocationExpression.ArgumentList.Arguments.Count == 0)
         {
@@ -1518,88 +1525,68 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }
 
         var argumentExpression = invocationExpression.ArgumentList.Arguments.First().Expression;
+        ISymbol? symbol = null;
 
-        if (argumentExpression is not LambdaExpressionSyntax lambdaExpression)
+        if (argumentExpression is LambdaExpressionSyntax lambdaExpression)
         {
-            if (argumentExpression is not IdentifierNameSyntax methodGroupIdentifier)
-            {
-                return;
-            }
-
-            var methodGroupSymbol = semanticModel.GetSymbolInfo(methodGroupIdentifier).Symbol;
-            if (methodGroupSymbol is not IMethodSymbol methodSymbol)
-            {
-                return;
-            }
-
-            var methodSpec = MockableSpec.TryCreate(methodSymbol);
-            if (methodSpec != null)
-            {
-                mockables.Add(methodSpec);
-            }
-
-            return;
-        }
-
-        if (lambdaExpression is SimpleLambdaExpressionSyntax)
-        {
-            return; // Ignore simple lambdas like Overwrites.Mockable(x => x.SomeMethod());
-        }
-
-        if (lambdaExpression is ParenthesizedLambdaExpressionSyntax parenthesizedLambda)
-        {
-            if (parenthesizedLambda.ParameterList.Parameters.Count > 0)
+            if (lambdaExpression is ParenthesizedLambdaExpressionSyntax parenthesizedLambda && parenthesizedLambda.ParameterList.Parameters.Count > 0)
             {
                 return; // Ignore lambda's with paramters like (x) => ... or (x, y) => ...
             }
-        }
 
-        var bodyExpression = lambdaExpression.Body switch
-        {
-            ExpressionSyntax expression => expression, // () => SomeMethod()
-            BlockSyntax blockSyntax => blockSyntax.Statements.OfType<ReturnStatementSyntax>().FirstOrDefault()?.Expression, // () => { return SomeMethod(); }
-            _ => null,
-        };
-
-        if (bodyExpression is null)
-        {
-            return;
-        }
-
-        var symbol =
-            semanticModel.GetSymbolInfo(bodyExpression).Symbol
-            ?? bodyExpression switch
+            var bodyExpression = lambdaExpression.Body switch
             {
-                MemberAccessExpressionSyntax memberAccess => semanticModel.GetSymbolInfo(memberAccess.Name).Symbol,
-                InvocationExpressionSyntax invocation => semanticModel.GetSymbolInfo(invocation.Expression).Symbol,
+                ExpressionSyntax expression => expression, // () => SomeMethod()
+                BlockSyntax blockSyntax => blockSyntax.Statements.OfType<ReturnStatementSyntax>().FirstOrDefault()?.Expression, // () => { return SomeMethod(); }
                 _ => null,
             };
+
+            if (bodyExpression is not null)
+            {
+                symbol = semanticModel.GetSymbolInfo(bodyExpression).Symbol
+                    ?? bodyExpression switch
+                    {
+                        MemberAccessExpressionSyntax memberAccess => semanticModel.GetSymbolInfo(memberAccess.Name).Symbol,
+                        InvocationExpressionSyntax invocation => semanticModel.GetSymbolInfo(invocation.Expression).Symbol,
+                        _ => null,
+                    };
+            }
+        }
+        else if (argumentExpression is IdentifierNameSyntax methodGroupIdentifier)
+        {
+            symbol = semanticModel.GetSymbolInfo(methodGroupIdentifier).Symbol;
+        }
 
         if (symbol is not (IPropertySymbol or IFieldSymbol or IMethodSymbol))
         {
             return;
         }
 
-        // Probeer een MockableSpec (definitie voor een mock) te maken op basis van het gevonden symbool.
-        var mockableSpec = MockableSpec.TryCreate(symbol);
-        if (mockableSpec == null)
-        {
-            return;
-        }
-
         // Bepaal de basisnaam voor het dependency-lid.
-        var baseName = mockableSpec.DependencyMemberName;
-        var finalName = baseName;
+        var baseMemberName = symbol.Name;
+        var finalMemberName = baseMemberName;
         int duplicateSuffix = 1;
 
         // Voorkom dubbele namen in de lijst: als de naam al bestaat, voeg een nummer toe (bijv. _1, _2).
-        while (mockables.Any(m => string.Equals(m.DependencyMemberName, finalName, StringComparison.Ordinal)))
+        while (instructions.DependencyMemberNames.Values.Any(name => string.Equals(name, finalMemberName, StringComparison.Ordinal)))
         {
-            finalName = $"{baseName}_{duplicateSuffix}";
+            finalMemberName = $"{baseMemberName}_{duplicateSuffix}";
             duplicateSuffix++;
         }
 
-        // Voeg de specificatie toe aan de lijst met de (unieke) naam.
-        mockables.Add(mockableSpec with { DependencyMemberName = finalMemberName });
+        switch (symbol)
+        {
+            case IMethodSymbol methodSymbol:
+                instructions.MockableMethods.Add(methodSymbol);
+                break;
+            case IPropertySymbol propertySymbol:
+                instructions.MockableProperties.Add(propertySymbol);
+                break;
+            case IFieldSymbol fieldSymbol:
+                instructions.MockableFields.Add(fieldSymbol);
+                break;
+        }
+
+        instructions.DependencyMemberNames[symbol] = finalMemberName;
     }
 }
