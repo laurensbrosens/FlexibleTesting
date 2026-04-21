@@ -197,6 +197,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         }
 
         // For each mockable method, also add it to methodsToMakePublic so it becomes public
+        /*
         foreach (var mockableMethodFromTest in instructions.MockableMethods)
         {
             instructions.MethodsToMakePublic.Add(mockableMethodFromTest);
@@ -216,7 +217,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     instructions.MethodsToMakePublic.Add(baseMethod);
                 }
             }
-        }
+        }*/
 
         var oldName = targetClassNode.Identifier.Text;
         
@@ -259,710 +260,106 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
         FlexibleTestingInstructions instructions
     )
     {
-        var documentEditor = await DocumentEditor.CreateAsync(document);
-        var syntaxGenerator = documentEditor.Generator;
-        var semanticModel = await document.GetSemanticModelAsync();
+        var root = await document.GetSyntaxRootAsync() ?? throw new InvalidOperationException("Could not get syntax root");
+        var semanticModel = await document.GetSemanticModelAsync() ?? throw new InvalidOperationException("Could not get semantic model");
+        var generator = SyntaxGenerator.GetGenerator(document);
 
-        if (semanticModel == null)
-        {
-            return document;
-        }
+        // 1. Surgical Rewrites (Renaming, Mockable calls, Publicity)
+        var rewriter = new FlexibleTestingRewriter(semanticModel, instructions, generator);
+        var surgicallyTransformedRoot = rewriter.Visit(root);
 
-        bool needsCallerMemberName = false;
-
-        // Pre-extract method symbols from the original semantic model before any editor operations
-        // This avoids "Syntax node is not within syntax tree" errors inside ReplaceNode callbacks
-        var methodSymbolsMap = new Dictionary<string, IMethodSymbol>();
-        foreach (var member in classNode.Members.OfType<MethodDeclarationSyntax>())
-        {
-            var methodSymbol = semanticModel.GetDeclaredSymbol(member);
-            if (methodSymbol != null)
-            {
-                var key = $"{member.Identifier.Text}:{GetMethodSignature(methodSymbol)}";
-                methodSymbolsMap[key] = methodSymbol;
-            }
-        }
-
-        // Phase 1: Transform the class structure (rename, add field, update constructors, make methods public)
-        // Do NOT try to replace mockables here - the semantic model is bound to the original tree
-        documentEditor.ReplaceNode(
-            classNode,
-            (oldClassNode, generator) =>
-            {
-                var updatedClassNode = (ClassDeclarationSyntax)oldClassNode;
-
-                // 1. Rename class
-                updatedClassNode = (ClassDeclarationSyntax)generator.WithName(updatedClassNode, instructions.NewClassName);
-
-                // 1b. If MockInheritance, update base class reference
-                if (instructions.MockInheritance && updatedClassNode.BaseList != null)
-                {
-                    var baseClassName = $"{instructions.OldClassName}Base_G";
-                    var newBaseList = updatedClassNode.BaseList.WithTypes(
-                        SyntaxFactory.SeparatedList(
-                            [(BaseTypeSyntax)SyntaxFactory.SimpleBaseType(SyntaxFactory.IdentifierName(baseClassName))]
-                        )
-                    );
-                    updatedClassNode = updatedClassNode.WithBaseList(newBaseList);
-                }
-
-                // 2. Add dependency injection field
-                var fieldDeclaration = (FieldDeclarationSyntax)
-                    generator.FieldDeclaration(
-                        instructions.DependenciesFieldName,
-                        generator.IdentifierName(instructions.DependenciesInterfaceName),
-                        Accessibility.Private,
-                        DeclarationModifiers.ReadOnly
-                    );
-                updatedClassNode = updatedClassNode.AddMembers(fieldDeclaration);
-
-                // 2b. If MockInheritance, add base dependencies field
-                if (instructions.MockInheritance)
-                {
-                    var baseDependenciesFieldName = "_baseDependencies";
-                    var baseDependenciesInterfaceName = $"IAuto{instructions.OldClassName}BaseDependencies";
-                    var baseDependenciesField = (FieldDeclarationSyntax)
-                        generator.FieldDeclaration(
-                            baseDependenciesFieldName,
-                            generator.IdentifierName(baseDependenciesInterfaceName),
-                            Accessibility.Private,
-                            DeclarationModifiers.ReadOnly
-                        );
-                    updatedClassNode = updatedClassNode.AddMembers(baseDependenciesField);
-                }
-
-                // 3. Build new members list with transformed constructors and public methods
-                var newMembers = new List<MemberDeclarationSyntax>();
-                var hasExistingConstructors = false;
-
-                foreach (var member in updatedClassNode.Members)
-                {
-                    if (member is ConstructorDeclarationSyntax constructorDeclaration)
-                    {
-                        hasExistingConstructors = true;
-                        var updatedConstructor = instructions.MockInheritance
-                            ? RenameAndInjectDependenciesIntoCtor(constructorDeclaration, generator, instructions)
-                            : RenameAndInjectDependencyIntoCtor(constructorDeclaration, generator, instructions, ref needsCallerMemberName);
-                        newMembers.Add(updatedConstructor);
-                    }
-                    else if (member is MethodDeclarationSyntax methodDeclaration)
-                    {
-                        // Make methods public if they're in the list
-                        // Use pre-extracted symbol map instead of GetDeclaredSymbol to avoid tree binding issues
-                        var key = $"{methodDeclaration.Identifier.Text}:{GetMethodSignatureFromSyntax(methodDeclaration)}";
-                        var methodSymbol = methodSymbolsMap.TryGetValue(key, out var symbol) ? symbol : null;
-                        MemberDeclarationSyntax updatedMethod = methodDeclaration;
-
-                        if (methodSymbol != null && instructions.MethodsToMakePublic.Contains(methodSymbol))
-                        {
-                            updatedMethod = MakeMethodPublic((MethodDeclarationSyntax)updatedMethod);
-                        }
-
-                        newMembers.Add(updatedMethod);
-                    }
-                    else if (
-                        member is FieldDeclarationSyntax fieldDeclarationNode
-                        && (
-                            fieldDeclarationNode.Declaration.Variables.Any(v => v.Identifier.Text == instructions.DependenciesFieldName)
-                            || (
-                                instructions.MockInheritance
-                                && fieldDeclarationNode.Declaration.Variables.Any(v => v.Identifier.Text == "_baseDependencies")
-                            )
-                        )
-                    )
-                    {
-                        // Keep the dependency fields we added
-                        newMembers.Add(fieldDeclarationNode);
-                    }
-                    else
-                    {
-                        // Keep other members as-is for now (will process mockables in phase 2)
-                        newMembers.Add((MemberDeclarationSyntax)member);
-                    }
-                }
-
-                // If no constructors exist, create one
-                if (!hasExistingConstructors)
-                {
-                    var defaultConstructor = instructions.MockInheritance
-                        ? CreateDefaultDependencyInjectionConstructorWithBase(generator, instructions)
-                        : CreateDefaultDependencyInjectionConstructor(generator, instructions);
-                    newMembers.Add(defaultConstructor);
-                }
-
-                // Replace all members
-                updatedClassNode = updatedClassNode.WithMembers(SyntaxFactory.List(newMembers));
-                return updatedClassNode;
-            }
-        );
-
-        // Phase 2a: Get a new document (after Phase 1 transformations)
-        var changedDocument = documentEditor.GetChangedDocument();
-
-        // Phase 2b: Replace mockables with fresh semantic model bound to the current tree
-        // We do this AFTER ReplaceNode completes to ensure semantic model is properly bound
-        var documentEditor2b = await DocumentEditor.CreateAsync(changedDocument);
-        var syntaxGenerator2b = documentEditor2b.Generator;
-        var phase2bSemanticModel = await changedDocument.GetSemanticModelAsync();
-
-        if (phase2bSemanticModel != null)
-        {
-            // Find the updated class in the tree
-            var phase2bRoot = await changedDocument.GetSyntaxRootAsync();
-            var phase2bClass = phase2bRoot
-                ?.DescendantNodes()
-                .OfType<ClassDeclarationSyntax>()
-                .FirstOrDefault(classDeclaration => classDeclaration.Identifier.Text == instructions.NewClassName);
-
-            if (phase2bClass != null)
-            {
-                // Apply mockable replacements at the document level (not inside a ReplaceNode callback)
-                // This ensures semantic model operations work correctly with the actual tree
-                var (newDoc, callerMemberNameNeeded) = await ApplyMockableReplacements(
-                    changedDocument,
-                    phase2bClass,
-                    phase2bSemanticModel,
-                    instructions,
-                    needsCallerMemberName
-                );
-                changedDocument = newDoc;
-                needsCallerMemberName = callerMemberNameNeeded;
-            }
-        }
-
-        // Phase 3: Add the dependencies interface
-        var documentEditor3 = await DocumentEditor.CreateAsync(changedDocument);
-        var syntaxGenerator3 = documentEditor3.Generator;
-        var root3 = await changedDocument.GetSyntaxRootAsync();
-
-        var finalClassNode = root3
-            ?.DescendantNodes()
+        // 2. Structural Changes (Adding fields, Interfaces, Base Class)
+        var editor = new SyntaxEditor(surgicallyTransformedRoot, document.Project.Solution.Workspace);
+        var transformedClassNode = surgicallyTransformedRoot.DescendantNodes()
             .OfType<ClassDeclarationSyntax>()
-            .FirstOrDefault(classDeclaration => classDeclaration.Identifier.Text == instructions.NewClassName);
+            .First(c => c.Identifier.Text == instructions.NewClassName);
 
-        if (finalClassNode != null)
-        {
-            var interfaceDeclaration = BuildDependenciesInterface(syntaxGenerator3, instructions, semanticModel.Compilation);
-            documentEditor3.InsertAfter(finalClassNode, interfaceDeclaration);
-            changedDocument = documentEditor3.GetChangedDocument();
-        }
+        // Add Dependency Injection Fields
+        AddStructuralMembers(editor, transformedClassNode, instructions, generator, semanticModel.Compilation);
 
-        // Phase 3b: Handle MockInheritance - generate base class replacement and dependencies
+        // Handle MockInheritance (Base Class + Interface)
+        bool baseClassNeedsCallerMemberName = false;
         if (instructions.MockInheritance && classNode.BaseList != null && classNode.BaseList.Types.Any())
         {
-            // Extract which base members are actually used
-            var baseType = instructions.TargetType.BaseType;
-            if (baseType != null && baseType.SpecialType != SpecialType.System_Object)
-            {
-                var usedBaseMembers = ExtractUsedBaseMembers(classNode, instructions.TargetType, await document.GetSemanticModelAsync());
-
-                if (usedBaseMembers.Any())
-                {
-                    var documentEditor3b = await DocumentEditor.CreateAsync(changedDocument);
-                    var syntaxGenerator3b = documentEditor3b.Generator;
-                    var root3b = await changedDocument.GetSyntaxRootAsync();
-
-                    var updatedClassNode = root3b
-                        ?.DescendantNodes()
-                        .OfType<ClassDeclarationSyntax>()
-                        .FirstOrDefault(classDeclaration => classDeclaration.Identifier.Text == instructions.NewClassName);
-
-                    if (updatedClassNode != null)
-                    {
-                        var baseClassName = $"{instructions.OldClassName}Base_G";
-                        var baseDependenciesInterfaceName = $"IAuto{instructions.OldClassName}BaseDependencies";
-
-                        // Generate the base class replacement
-                        var baseClassDeclaration = BuildBaseClassReplacement(
-                            syntaxGenerator3b,
-                            instructions.OldClassName,
-                            baseType,
-                            usedBaseMembers,
-                            baseDependenciesInterfaceName,
-                            instructions.DependenciesFieldName,
-                            instructions.MethodsToMakePublic
-                        );
-
-                        // Generate the base dependencies interface
-                        var baseDependenciesInterfaceDeclaration = BuildBaseDependenciesInterface(
-                            syntaxGenerator3b,
-                            instructions.OldClassName,
-                            usedBaseMembers
-                        );
-
-                        // Insert base class and interface before the derived class
-                        documentEditor3b.InsertBefore(updatedClassNode, baseClassDeclaration);
-                        documentEditor3b.InsertBefore(updatedClassNode, baseDependenciesInterfaceDeclaration);
-
-                        changedDocument = documentEditor3b.GetChangedDocument();
-
-                        // If any base members have CallerMemberName attributes, we'll need the using statement
-                        var callerMemberNameAttributeName = "CallerMemberNameAttribute";
-                        if (
-                            usedBaseMembers
-                                .OfType<IMethodSymbol>()
-                                .Any(methodSymbol =>
-                                    methodSymbol.Parameters.Any(parameterSymbol => parameterSymbol.GetAttributes().Any(attributeData => attributeData.AttributeClass?.Name == callerMemberNameAttributeName))
-                                )
-                        )
-                        {
-                            needsCallerMemberName = true;
-                        }
-                    }
-                }
-            }
+            baseClassNeedsCallerMemberName = AddBaseClassReplacementStructural(editor, transformedClassNode, instructions, generator, semanticModel);
         }
 
-        // Phase 4: Add necessary using directives
-        var documentEditor4 = await DocumentEditor.CreateAsync(changedDocument);
-        var syntaxGenerator4 = documentEditor4.Generator;
-        var root4 = await changedDocument.GetSyntaxRootAsync();
-
-        if (root4 is CompilationUnitSyntax compilationUnit)
+        // 3. Finalize Usings and Simplification
+        var finalRoot = editor.GetChangedRoot();
+        var usingsToAdd = new List<string> { "System" };
+        if (rewriter.NeedsCallerMemberName || baseClassNeedsCallerMemberName)
         {
-            var usingsToAdd = new List<string> { nameof(System) };
-            if (needsCallerMemberName)
-            {
-                usingsToAdd.Add("System.Runtime.CompilerServices");
-            }
-
-            var currentUsings = compilationUnit.Usings.Select(u => u.Name?.ToString()).ToHashSet();
-            var newUsings = usingsToAdd
-                .Where(u => !currentUsings.Contains(u))
-                .Select(u => (UsingDirectiveSyntax)syntaxGenerator4.NamespaceImportDeclaration(u))
-                .ToArray();
-
-            if (newUsings.Any())
-            {
-                documentEditor4.ReplaceNode(compilationUnit, (node, _) => ((CompilationUnitSyntax)node).AddUsings(newUsings));
-                changedDocument = documentEditor4.GetChangedDocument();
-
-                changedDocument = await Simplifier.ReduceAsync(changedDocument);
-            }
+            usingsToAdd.Add("System.Runtime.CompilerServices");
         }
 
-        return changedDocument;
+        finalRoot = AddMissingUsings(finalRoot, usingsToAdd, generator);
+        
+        var rewrittenDocument = document.WithSyntaxRoot(finalRoot);
+        return await Simplifier.ReduceAsync(rewrittenDocument);
     }
 
-    private async Task<(Document Document, bool NeedsCallerMemberName)> ApplyMockableReplacements(
-        Document document,
-        ClassDeclarationSyntax classNode,
-        SemanticModel semanticModel,
-        FlexibleTestingInstructions instructions,
-        bool needsCallerMemberName
-    )
+    private void AddStructuralMembers(SyntaxEditor editor, ClassDeclarationSyntax classNode, FlexibleTestingInstructions instructions, SyntaxGenerator generator, Compilation compilation)
     {
-        var documentEditor = await DocumentEditor.CreateAsync(document);
-        var syntaxGenerator = documentEditor.Generator;
+        // 1. Add _dependencies field
+        var field = generator.FieldDeclaration(
+            instructions.DependenciesFieldName,
+            generator.IdentifierName(instructions.DependenciesInterfaceName),
+            Accessibility.Private,
+            DeclarationModifiers.ReadOnly);
+        editor.AddMember(classNode, field);
 
-        // Process all members and replace mockables
-        // This happens outside ReplaceNode callback to ensure semantic model is properly bound
-        var syntaxRoot = await document.GetSyntaxRootAsync();
-        if (syntaxRoot == null)
+        // 2. Add _baseDependencies field if needed
+        if (instructions.MockInheritance)
         {
-            return (document, needsCallerMemberName);
+            var baseField = generator.FieldDeclaration(
+                "_baseDependencies",
+                generator.IdentifierName($"IAuto{instructions.OldClassName}BaseDependencies"),
+                Accessibility.Private,
+                DeclarationModifiers.ReadOnly);
+            editor.AddMember(classNode, baseField);
         }
 
-        var currentSyntaxRoot = syntaxRoot;
-
-        // Find the class in the current root
-        var classInTree = currentSyntaxRoot
-            .DescendantNodes()
-            .OfType<ClassDeclarationSyntax>()
-            .FirstOrDefault(classDeclaration => classDeclaration.Identifier.Text == instructions.NewClassName);
-
-        if (classInTree == null)
-        {
-            return (document, needsCallerMemberName);
-        }
-
-        // Build list of member replacements
-        var memberReplacements = new List<(SyntaxNode OldMember, SyntaxNode NewMember)>();
-
-        foreach (var member in classInTree.Members)
-        {
-            // Replace mockables in each member
-            // Note: needsCallerMemberName is updated by ref inside ReplaceMockablesInNode
-            var tempNeedsCallerMemberName = needsCallerMemberName;
-            var memberWithMockablesReplaced = ReplaceMockablesInNode(
-                member,
-                syntaxGenerator,
-                semanticModel,
-                instructions,
-                ref tempNeedsCallerMemberName
-            );
-            needsCallerMemberName = tempNeedsCallerMemberName;
-
-            if (!member.IsEquivalentTo(memberWithMockablesReplaced))
-            {
-                memberReplacements.Add((member, memberWithMockablesReplaced));
-            }
-        }
-
-        // Apply all replacements to the tree at once using ReplaceNodes
-        // This avoids issues with stale node references when applying replacements sequentially
-        if (memberReplacements.Count > 0)
-        {
-            var replacementDictionary = memberReplacements.ToDictionary(replacement => replacement.OldMember, replacement => replacement.NewMember);
-            var newSyntaxRoot = currentSyntaxRoot.ReplaceNodes(replacementDictionary.Keys, (oldNode, _) => replacementDictionary[oldNode]);
-            var newDocument = document.WithSyntaxRoot(newSyntaxRoot);
-            return (newDocument, needsCallerMemberName);
-        }
-
-        return (document, needsCallerMemberName);
+        // 3. Add Dependencies Interface
+        var interfaceDecl = BuildDependenciesInterface(generator, instructions, compilation);
+        editor.InsertAfter(classNode, interfaceDecl);
     }
 
-    private ConstructorDeclarationSyntax RenameAndInjectDependencyIntoCtor(
-        ConstructorDeclarationSyntax ctor,
-        SyntaxGenerator generator,
-        FlexibleTestingInstructions instructions,
-        ref bool needsCallerMemberName
-    )
+    private bool AddBaseClassReplacementStructural(SyntaxEditor editor, ClassDeclarationSyntax classNode, FlexibleTestingInstructions instructions, SyntaxGenerator generator, SemanticModel semanticModel)
     {
-        // Determine parameter name (avoid conflicts)
-        var paramName = instructions.DependenciesParameterName;
-        if (ctor.ParameterList.Parameters.Any(p => p.Identifier.Text == paramName))
-        {
-            paramName += "2";
-        }
+        var baseType = instructions.TargetType.BaseType;
+        if (baseType == null || baseType.SpecialType == SpecialType.System_Object) return false;
 
-        // Create new parameter for dependency injection
-        var newParam = (ParameterSyntax)
-            generator.ParameterDeclaration(paramName, generator.IdentifierName(instructions.DependenciesInterfaceName));
+        // Note: we use the ORIGINAL classNode to extract used members
+        var originalClassNode = (ClassDeclarationSyntax)instructions.TargetType.DeclaringSyntaxReferences[0].GetSyntax();
+        var usedBaseMembers = ExtractUsedBaseMembers(originalClassNode, instructions.TargetType, semanticModel);
 
-        // Create assignment statement: this._dependencies = dependencies;
-        var assignment = (StatementSyntax)
-            generator.ExpressionStatement(
-                generator.AssignmentStatement(
-                    generator.IdentifierName(instructions.DependenciesFieldName),
-                    generator.IdentifierName(paramName)
-                )
-            );
+        if (!usedBaseMembers.Any()) return false;
 
-        // Build new constructor body
-        BlockSyntax newBody;
-        if (ctor.Body != null)
-        {
-            // Add assignment at the beginning of existing body
-            var existingStatements = ctor.Body.Statements;
-            if (existingStatements.Count > 0)
-            {
-                newBody = SyntaxFactory.Block(new[] { assignment }.Concat(existingStatements).ToArray());
-            }
-            else
-            {
-                newBody = ctor.Body.AddStatements(assignment);
-            }
-        }
-        else if (ctor.ExpressionBody != null)
-        {
-            // Convert expression body to block body
-            var expr = SyntaxFactory.ExpressionStatement((ExpressionSyntax)ctor.ExpressionBody.Expression);
-            newBody = SyntaxFactory.Block(assignment, expr);
-        }
-        else
-        {
-            // No body or expression body - create new block with just assignment
-            newBody = SyntaxFactory.Block(assignment);
-        }
+        var baseClassName = $"{instructions.OldClassName}Base_G";
+        var baseDepsInterfaceName = $"IAuto{instructions.OldClassName}BaseDependencies";
 
-        // Create new constructor with the dependency parameter
-        var newCtor = ctor.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName))
-            .WithParameterList(ctor.ParameterList.AddParameters(newParam))
-            .WithBody(newBody)
-            .WithExpressionBody(null)
-            .WithSemicolonToken(default);
+        var baseClassDecl = BuildBaseClassReplacement(generator, instructions.OldClassName, baseType, usedBaseMembers, baseDepsInterfaceName, instructions.DependenciesFieldName, instructions.MethodsToMakePublic);
+        var baseInterfaceDecl = BuildBaseDependenciesInterface(generator, instructions.OldClassName, usedBaseMembers);
 
-        return newCtor;
+        editor.InsertBefore(classNode, baseClassDecl);
+        editor.InsertBefore(classNode, baseInterfaceDecl);
+
+        return usedBaseMembers.OfType<IMethodSymbol>().Any(m => m.Parameters.Any(p => p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute")));
     }
 
-    private ConstructorDeclarationSyntax CreateDefaultDependencyInjectionConstructor(
-        SyntaxGenerator generator,
-        FlexibleTestingInstructions instructions
-    )
+    private SyntaxNode AddMissingUsings(SyntaxNode root, IEnumerable<string> namespaces, SyntaxGenerator generator)
     {
-        var paramName = instructions.DependenciesParameterName;
-        var newParam = (ParameterSyntax)
-            generator.ParameterDeclaration(paramName, generator.IdentifierName(instructions.DependenciesInterfaceName));
+        if (root is not CompilationUnitSyntax compilationUnit) return root;
 
-        var assignment = (StatementSyntax)
-            generator.ExpressionStatement(
-                generator.AssignmentStatement(
-                    generator.IdentifierName(instructions.DependenciesFieldName),
-                    generator.IdentifierName(paramName)
-                )
-            );
+        var currentUsings = compilationUnit.Usings.Select(u => u.Name?.ToString()).ToHashSet();
+        var newUsings = namespaces
+            .Where(ns => !currentUsings.Contains(ns))
+            .Select(ns => (UsingDirectiveSyntax)generator.NamespaceImportDeclaration(ns))
+            .ToArray();
 
-        var newCtor = (ConstructorDeclarationSyntax)
-            generator.ConstructorDeclaration(parameters: [newParam], accessibility: Accessibility.Public, statements: [assignment]);
-
-        return newCtor.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
+        return compilationUnit.AddUsings(newUsings);
     }
 
-    private ConstructorDeclarationSyntax RenameAndInjectDependenciesIntoCtor(
-        ConstructorDeclarationSyntax ctor,
-        SyntaxGenerator generator,
-        FlexibleTestingInstructions instructions
-    )
-    {
-        // Determine parameter names (avoid conflicts)
-        var depsParamName = instructions.DependenciesParameterName;
-        if (ctor.ParameterList.Parameters.Any(p => p.Identifier.Text == depsParamName))
-        {
-            depsParamName += "2";
-        }
-
-        var baseDepsParamName = "baseDependencies";
-        if (ctor.ParameterList.Parameters.Any(p => p.Identifier.Text == baseDepsParamName))
-        {
-            baseDepsParamName = "baseDependencies2";
-        }
-
-        // Create new parameters for both dependency injections
-        var depsParam = (ParameterSyntax)
-            generator.ParameterDeclaration(depsParamName, generator.IdentifierName(instructions.DependenciesInterfaceName));
-        var baseDepsParam = (ParameterSyntax)
-            generator.ParameterDeclaration(
-                baseDepsParamName,
-                generator.IdentifierName($"IAuto{instructions.OldClassName}BaseDependencies")
-            );
-
-        // Create assignment statements
-        var depsAssignment = (StatementSyntax)
-            generator.ExpressionStatement(
-                generator.AssignmentStatement(
-                    generator.IdentifierName(instructions.DependenciesFieldName),
-                    generator.IdentifierName(depsParamName)
-                )
-            );
-
-        var baseDepsAssignment = (StatementSyntax)
-            generator.ExpressionStatement(
-                generator.AssignmentStatement(generator.IdentifierName("_baseDependencies"), generator.IdentifierName(baseDepsParamName))
-            );
-
-        // Update base() call to pass baseDependencies
-        ConstructorInitializerSyntax? newInitializer = null;
-        if (ctor.Initializer != null && ctor.Initializer.IsKind(SyntaxKind.BaseConstructorInitializer))
-        {
-            var baseArgs = ctor.Initializer.ArgumentList.Arguments.Add(
-                SyntaxFactory.Argument(SyntaxFactory.IdentifierName(baseDepsParamName))
-            );
-            newInitializer = ctor.Initializer.WithArgumentList(ctor.Initializer.ArgumentList.WithArguments(baseArgs));
-        }
-
-        // Build new constructor body
-        BlockSyntax newBody;
-        if (ctor.Body != null)
-        {
-            var existingStatements = ctor.Body.Statements;
-            if (existingStatements.Count > 0)
-            {
-                newBody = SyntaxFactory.Block(new[] { depsAssignment, baseDepsAssignment }.Concat(existingStatements).ToArray());
-            }
-            else
-            {
-                newBody = SyntaxFactory.Block(depsAssignment, baseDepsAssignment);
-            }
-        }
-        else if (ctor.ExpressionBody != null)
-        {
-            var expr = SyntaxFactory.ExpressionStatement((ExpressionSyntax)ctor.ExpressionBody.Expression);
-            newBody = SyntaxFactory.Block(depsAssignment, baseDepsAssignment, expr);
-        }
-        else
-        {
-            newBody = SyntaxFactory.Block(depsAssignment, baseDepsAssignment);
-        }
-
-        // Create new constructor with both dependency parameters
-        var newCtor = ctor.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName))
-            .WithParameterList(ctor.ParameterList.AddParameters(depsParam, baseDepsParam))
-            .WithBody(newBody)
-            .WithExpressionBody(null)
-            .WithSemicolonToken(default);
-
-        if (newInitializer != null)
-        {
-            newCtor = newCtor.WithInitializer(newInitializer);
-        }
-
-        return newCtor;
-    }
-
-    private ConstructorDeclarationSyntax CreateDefaultDependencyInjectionConstructorWithBase(
-        SyntaxGenerator generator,
-        FlexibleTestingInstructions instructions
-    )
-    {
-        var depsParamName = instructions.DependenciesParameterName;
-        var baseDepsParamName = "baseDependencies";
-
-        var depsParam = (ParameterSyntax)
-            generator.ParameterDeclaration(depsParamName, generator.IdentifierName(instructions.DependenciesInterfaceName));
-        var baseDepsParam = (ParameterSyntax)
-            generator.ParameterDeclaration(
-                baseDepsParamName,
-                generator.IdentifierName($"IAuto{instructions.OldClassName}BaseDependencies")
-            );
-
-        var depsAssignment = (StatementSyntax)
-            generator.ExpressionStatement(
-                generator.AssignmentStatement(
-                    generator.IdentifierName(instructions.DependenciesFieldName),
-                    generator.IdentifierName(depsParamName)
-                )
-            );
-
-        var baseDepsAssignment = (StatementSyntax)
-            generator.ExpressionStatement(
-                generator.AssignmentStatement(generator.IdentifierName("_baseDependencies"), generator.IdentifierName(baseDepsParamName))
-            );
-
-        var newCtor = (ConstructorDeclarationSyntax)
-            generator.ConstructorDeclaration(
-                parameters: [depsParam, baseDepsParam],
-                accessibility: Accessibility.Public,
-                statements: [depsAssignment, baseDepsAssignment]
-            );
-
-        return newCtor.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
-    }
-
-    private SyntaxNode ReplaceMockablesInNode(
-        SyntaxNode syntaxNode,
-        SyntaxGenerator generator,
-        SemanticModel semanticModel,
-        FlexibleTestingInstructions instructions,
-        ref bool needsCallerMemberName
-    )
-    {
-        // Build a list of replacements with tracking of node positions to handle stale references
-        var memberReplacements = new List<(SyntaxNode OldNode, SyntaxNode NewNode)>();
-
-        // FIX: Gebruik DescendantNodesAndSelf en zorg dat we diep genoeg graven (ook in accessors van properties)
-        var descendantNodes = syntaxNode.DescendantNodesAndSelf()
-            .Where(node => node is InvocationExpressionSyntax or MemberAccessExpressionSyntax or AccessorDeclarationSyntax)
-            .ToList();
-
-        var nodesToReplaceWithSymbols = new List<(SyntaxNode Node, ISymbol Symbol)>();
-
-        foreach (var node in descendantNodes)
-        {
-            var symbol = GetMockableSymbolForNode(node, semanticModel, instructions);
-            if (symbol != null)
-            {
-                nodesToReplaceWithSymbols.Add((node, symbol));
-            }
-        }
-
-        // Highest-node-only to avoid double-replacing (e.g. Guid.NewGuid() vs Guid.NewGuid)
-        var finalNodesToReplace = nodesToReplaceWithSymbols
-            .Where(nodeWithSymbol => !nodesToReplaceWithSymbols.Any(otherNodeWithSymbol => nodeWithSymbol.Node != otherNodeWithSymbol.Node && nodeWithSymbol.Node.Ancestors().Contains(otherNodeWithSymbol.Node)))
-            .ToList();
-
-        // Build all replacements first, then apply them with ReplaceNodes to avoid stale references
-        foreach (var (nodeToReplace, memberSymbol) in finalNodesToReplace)
-        {
-            if (memberSymbol is IMethodSymbol methodSymbol && methodSymbol.Parameters.Any(p => p.GetAttributes().Any(a => a.AttributeClass?.Name == "CallerMemberNameAttribute")))
-            {
-                needsCallerMemberName = true;
-            }
-
-            var dependencyMemberName = instructions.DependencyMemberNames[memberSymbol];
-
-            SyntaxNode replacementNode;
-            if (memberSymbol is IMethodSymbol)
-            {
-                var invocationArguments = nodeToReplace is InvocationExpressionSyntax invocationExpression
-                    ? invocationExpression.ArgumentList.Arguments.Select(argument => argument.Expression)
-                    : Enumerable.Empty<SyntaxNode>();
-
-                replacementNode = generator.InvocationExpression(
-                    generator.MemberAccessExpression(
-                        generator.IdentifierName(instructions.DependenciesFieldName),
-                        dependencyMemberName
-                    ),
-                    invocationArguments
-                );
-            }
-            else
-            {
-                replacementNode = generator.InvocationExpression(
-                    generator.MemberAccessExpression(
-                        generator.IdentifierName(instructions.DependenciesFieldName),
-                        dependencyMemberName
-                    )
-                );
-            }
-
-            memberReplacements.Add((nodeToReplace, replacementNode.WithTriviaFrom(nodeToReplace)));
-        }
-
-        // Apply all replacements at once using ReplaceNodes to avoid stale node references
-        if (memberReplacements.Count > 0)
-        {
-            var replacementDictionary = memberReplacements.ToDictionary(replacement => replacement.OldNode, replacement => replacement.NewNode);
-            var resultNode = syntaxNode.ReplaceNodes(replacementDictionary.Keys, (oldNode, _) => replacementDictionary[oldNode]);
-            return resultNode;
-        }
-
-        return syntaxNode;
-    }
-
-    private static ISymbol? GetMockableSymbolForNode(SyntaxNode syntaxNode, SemanticModel semanticModel, FlexibleTestingInstructions instructions)
-    {
-        // Probeer direct het symbool op te halen voor de node
-        var symbol = semanticModel.GetSymbolInfo(syntaxNode).Symbol;
-
-        // Als dat niet lukt, kijk specifiek naar de naam van de member access
-        if (symbol == null && syntaxNode is MemberAccessExpressionSyntax memberAccessExpression)
-        {
-            symbol = semanticModel.GetSymbolInfo(memberAccessExpression.Name).Symbol;
-        }
-
-        // Voor method calls: check de expressie (bijv. de methode-naam voor de haakjes)
-        if (symbol == null && syntaxNode is InvocationExpressionSyntax invocationExpression)
-        {
-            symbol = semanticModel.GetSymbolInfo(invocationExpression.Expression).Symbol;
-        }
-
-        // Als het een property is, vallen getters/setters onder IPropertySymbol
-        if (symbol is IPropertySymbol or IFieldSymbol or IMethodSymbol)
-        {
-            return instructions.AllMockables.FirstOrDefault(mockableSymbol => SymbolSignatureComparer.Default.Equals(mockableSymbol, symbol));
-        }
-
-        return null;
-    }
-
-    private static bool SymbolsMatch(ISymbol? symbolA, ISymbol? symbolB)
-    {
-        return SymbolSignatureComparer.Default.Equals(symbolA, symbolB);
-    }
-
-    private static MethodDeclarationSyntax MakeMethodPublic(MethodDeclarationSyntax methodDeclaration)
-    {
-        // Remove existing accessibility modifiers (protected, private, internal, etc.)
-        var modifiers = methodDeclaration
-            .Modifiers.Where(modifier =>
-                modifier.Kind()
-                    is not SyntaxKind.ProtectedKeyword
-                        and not SyntaxKind.PrivateKeyword
-                        and not SyntaxKind.InternalKeyword
-                        and not SyntaxKind.PublicKeyword
-            )
-            .ToList();
-
-        // Remove the override modifier as we're converting this to a public method
-        // that shouldn't override the base (the base will also be made public)
-        modifiers = modifiers.Where(modifier => modifier.Kind() != SyntaxKind.OverrideKeyword).ToList();
-
-        // Add public modifier at the beginning
-        modifiers.Insert(0, SyntaxFactory.Token(SyntaxKind.PublicKeyword));
-
-        return methodDeclaration.WithModifiers(SyntaxFactory.TokenList(modifiers));
-    }
 
     private static string GetMethodSignature(IMethodSymbol methodSymbol)
     {
@@ -1013,8 +410,6 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
                     // For simple identifiers: OnPropertyChanged, OnLoad (without base.), etc.
                     memberSymbol = semanticModel.GetSymbolInfo(identifierName).Symbol;
                     break;
-
-                // TODO: Handle other cases if necessary (e.g., ObjectCreationExpressionSyntax, etc.)
             }
 
             // Check if symbol belongs to base type
@@ -1026,6 +421,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
 
         return usedMembers.ToList();
     }
+
 
     private static SyntaxNode BuildDependenciesInterface(SyntaxGenerator generator, FlexibleTestingInstructions instructions, Compilation compilation)
     {
