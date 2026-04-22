@@ -1,6 +1,7 @@
 using FlexibleTestingDomain;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -23,6 +24,8 @@ public class FlexibleTestingInstructionsCreator
 
     public IEnumerable<FlexibleTestingInstructions> CreateAll()
     {
+        var createdInstructions = new List<FlexibleTestingInstructions>();
+
         foreach (var tree in _testCompilation.SyntaxTrees)
         {
             var model = _testCompilation.GetSemanticModel(tree);
@@ -34,10 +37,15 @@ public class FlexibleTestingInstructionsCreator
                 {
                     var instructions = Create(classNode, model);
                     if (instructions != null)
-                        yield return instructions;
+                        createdInstructions.Add(instructions);
                 }
             }
         }
+
+        ValidateRecursiveInheritance(createdInstructions);
+
+        foreach (var instructions in createdInstructions)
+            yield return instructions;
     }
 
     private bool IsTargetBuilder(ClassDeclarationSyntax classNode, SemanticModel model)
@@ -87,8 +95,16 @@ public class FlexibleTestingInstructionsCreator
                 case nameof(Overwrites.MockInheritance):
                     instructions.MockInheritance = true;
                     break;
+                case nameof(Overwrites.RecursiveMockInheritance):
+                    instructions.RecursiveMockInheritance = true;
+                    break;
             }
         }
+
+        if (instructions.MockInheritance && instructions.RecursiveMockInheritance)
+            throw new InvalidOperationException(
+                $"Builder '{classNode.Identifier.ValueText}' cannot use both MockInheritance() and RecursiveMockInheritance()."
+            );
 
         if (targetTypeFromTest == null || targetTypeFromTest.TypeKind == TypeKind.Error)
             return null;
@@ -109,6 +125,63 @@ public class FlexibleTestingInstructionsCreator
         MapMockClassConstructors(instructions, targetClassNode);
 
         return instructions;
+    }
+
+    private void ValidateRecursiveInheritance(IReadOnlyList<FlexibleTestingInstructions> instructionsList)
+    {
+        var byTargetMetadataName = new Dictionary<string, FlexibleTestingInstructions>(StringComparer.Ordinal);
+
+        foreach (var instructions in instructionsList)
+        {
+            var metadataName = GetTypeMetadataName(instructions.TargetType.OriginalDefinition);
+            if (byTargetMetadataName.ContainsKey(metadataName))
+            {
+                throw new InvalidOperationException(
+                    $"Multiple generator builders target '{metadataName}'. Recursive inheritance requires one builder per target type."
+                );
+            }
+
+            byTargetMetadataName[metadataName] = instructions;
+        }
+
+        foreach (var instructions in instructionsList.Where(i => i.RecursiveMockInheritance))
+            ValidateRecursiveChain(instructions, byTargetMetadataName, new HashSet<string>(StringComparer.Ordinal));
+    }
+
+    private void ValidateRecursiveChain(
+        FlexibleTestingInstructions instructions,
+        IReadOnlyDictionary<string, FlexibleTestingInstructions> byTargetMetadataName,
+        HashSet<string> traversalStack
+    )
+    {
+        var baseType = instructions.TargetType.BaseType;
+        if (baseType == null || baseType.SpecialType == SpecialType.System_Object)
+            return;
+
+        var baseMetadataName = GetTypeMetadataName(baseType.OriginalDefinition);
+        if (!traversalStack.Add(baseMetadataName))
+        {
+            throw new InvalidOperationException(
+                $"Recursive inheritance cycle detected while resolving '{instructions.TargetType.Name}'."
+            );
+        }
+
+        if (!byTargetMetadataName.TryGetValue(baseMetadataName, out var baseInstructions))
+        {
+            throw new InvalidOperationException(
+                $"RecursiveMockInheritance() on '{instructions.TargetType.Name}' requires a builder for its base type '{baseType.Name}'."
+            );
+        }
+
+        if (!baseInstructions.RecursiveMockInheritance && baseType.BaseType is { SpecialType: not SpecialType.System_Object } )
+        {
+            throw new InvalidOperationException(
+                $"Builder '{baseInstructions.TargetType.Name}' must also call RecursiveMockInheritance() because it has a non-object base type."
+            );
+        }
+
+        ValidateRecursiveChain(baseInstructions, byTargetMetadataName, traversalStack);
+        traversalStack.Remove(baseMetadataName);
     }
 
     private void AddToMakePublic(SemanticModel model, HashSet<IMethodSymbol> methodsToMakePublic, InvocationExpressionSyntax invocation)

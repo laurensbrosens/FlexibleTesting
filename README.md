@@ -1,6 +1,6 @@
 # FlexibleTesting
 
-FlexibleTesting is a compile-time mocking framework for C#. It allows you to unit test legacy code—including WPF ViewModels, without heavy refactoring. It generates a "testable copy" with a `_G` suffix of your class and applies surgical rewrites to bypass side effects like static calls, database requests, and protected encapsulation.
+FlexibleTesting is a compile-time mocking framework for C#. It allows you to unit test legacy code, including WPF ViewModels, without heavy refactoring. It generates a "testable copy" with a `_G` suffix of your class and applies surgical rewrites to bypass side effects like static calls, database requests, and protected encapsulation.
 
 ## Getting Started
 
@@ -8,81 +8,18 @@ To test a legacy class, create a builder class marked with `[GeneratorInstructio
 
 ```csharp
 [GeneratorInstructions]
-internal class UserViewModelBuilder : IGeneratorInstructions
+internal class UserViewModelBaseBuilder(SomeDataObject someDataObject) : UserViewModelBase(someDataObject), IGeneratorInstructions
 {
     public void Configure()
     {
-        Overwrites.ForClass<UserViewModel>(); // Class to copy
-        Overwrites.MockInheritance(); // Mock parent class automatically
-        Overwrites.Mock(() => DateTime.Now); // Add methods to mock
-        Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad); // Add methods to make public
+        Overwrites.ForClass<UserViewModelBase>();
+        Overwrites.Mock(() => DateTime.Now);
+        Overwrites.Mock<UserService>();
+        Overwrites.RecursiveMockInheritance();
     }
 }
 ```
 
-## Usage Examples
-
-### Mocking Static Calls
-Redirect problematic static calls (like `DateTime.Now` or `Guid.NewGuid`) to a mockable dependency.
-```csharp
-// In Builder:
-Overwrites.Mock(() => DateTime.Now);
-
-// In Test:
-_dependencies.Now().Returns(new DateTime(2026, 4, 14));
-```
-
-### Publicizing Private Members
-Test private or protected methods without using Reflection.
-```csharp
-Overwrites.MakePublic<IShadow, Action>(x => x.InternalMethod);
-// Rewrites the method to public in the generated UserViewModel_G
-```
-
-### Bypassing Heavy Inheritance
-Replace a base class that has side effects in its constructor with an auto-generated copy.
-```csharp
-Overwrites.MockInheritance(); 
-class UserViewModel_G : BaseViewModel_G // instead of : BaseViewModel
-```
-
-### Mocking Internal Services
-Automatically generate an interface for a concrete legacy service and redirect all usages.
-```csharp
-Overwrites.Mock<UserService>(); 
-// Original:
-_userService = new UserService();
-
-// Copy:
-_userService = _dependencies.UserService(); // Mockable dependency
-```
-
-### Stacking Instructions (Not implemented yet)
-Reuse common overwrite rules across multiple builders.
-```csharp
-Overwrites.Include<BaseBuilder>();
-```
-
-### Recursive Instructions (Not implemented yet)
-Create complex inheritance hierarchies using a builder file for each class in the hierarchy. Usefull for testing deeply connected inheritance trees without refactoring.
-```csharp
-Overwrites.RecursiveMockInheritance();
-```
-
-## Testing the Generated Class
-The generator produces a class named `{ClassName}_G` and a specific interface `IAuto{ClassName}Dependencies`. Use your favorite mocking library (like NSubstitute) to verify behavior.
-
-```csharp
-[Test]
-public void Constructor_Sets_Default_Date()
-{
-    var mock = Substitute.For<IAutoUserViewModelDependencies>();
-    var vm = new UserViewModel_G(new SomeDataObject(), mock);
-    
-    Assert.That(vm.DateTime, Is.EqualTo(mock.Now()));
-}
-```
-## Full example generated class
 ```csharp
 [GeneratorInstructions]
 internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewModel(someDataObject), IGeneratorInstructions
@@ -90,137 +27,157 @@ internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewMod
     public void Configure()
     {
         Overwrites.ForClass<UserViewModel>();
-        Overwrites.Mock(() => DateTime.Now);
-        // Overwrites.Mock(() => OnPropertyChanged); MockInheritance already handles this
-        Overwrites.Mock<IShadow, Action>(x => x.SomePrivateMethod);
-        Overwrites.Mock<UserService>();
-        Overwrites.MockInheritance();
-        Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad);
-        Overwrites.MakePublic<IShadow, Action>(x => x.SomePrivateMethod);
-    }
-    private interface IShadow // This is a hack for private members
-    {
-        // Signature has to be identical to the one in UserViewModel
-        public void IReallyWantToTestThisMethod(); 
+        Overwrites.Mock(() => Guid.NewGuid());
+        Overwrites.RecursiveMockInheritance();
     }
 }
 ```
+
+## Usage Examples
+
+### Mocking Static Calls
+Redirect problematic static calls, like `DateTime.Now` or `Guid.NewGuid`, to a mockable dependency.
+
 ```csharp
-public class UserViewModel : BaseViewModel
+// In Builder:
+Overwrites.Mock(() => DateTime.Now);
+
+// In Test:
+baseDeps.Now.Returns(() => new DateTime(2026, 4, 14));
+```
+
+### Publicizing Private Members
+Test private or protected methods without using reflection.
+
+```csharp
+Overwrites.MakePublic<IShadow, Action>(x => x.InternalMethod);
+// Rewrites the method to public in the generated UserViewModel_G
+```
+
+### Bypassing Heavy Inheritance
+Replace a base class that has side effects in its constructor with an auto-generated copy.
+
+```csharp
+Overwrites.MockInheritance();
+// class UserViewModel_G : BaseViewModel_G
+```
+
+### Mocking Internal Services
+Automatically generate an interface for a concrete legacy service and redirect all usages.
+
+```csharp
+Overwrites.Mock<UserService>();
+// Original:
+_userService = new UserService();
+
+// Copy:
+_userService = _dependencies.UserService();
+```
+
+### Stacking Instructions
+Reuse common overwrite rules across multiple builders.
+
+```csharp
+Overwrites.Include<BaseBuilder>();
+```
+
+### Recursive Instructions
+Create complex inheritance hierarchies using one builder file for each class in the chain. Each generated class becomes a full copy of its source, and the derived generated class inherits from the generated base copy.
+
+```csharp
+Overwrites.RecursiveMockInheritance();
+// UserViewModelBaseBuilder -> UserViewModelBase_G.g.cs
+// UserViewModelBuilder -> UserViewModel_G.g.cs
+// UserViewModel_G : UserViewModelBase_G
+```
+
+## Testing the Generated Class
+The generator produces a class named `{ClassName}_G` and a matching interface `IAuto{ClassName}Dependencies`. For recursive inheritance, the base class and the derived class each get their own generated file and their own dependency interface.
+
+```csharp
+[Test]
+public void Constructor_Sets_Defaults_From_Both_Dependency_Levels()
 {
-    public UserViewModel()
+    var data = new SomeDataObject();
+    var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+    var deps = Substitute.For<IAutoUserViewModelDependencies>();
+
+    baseDeps.Now.Returns(() => new DateTime(2026, 4, 14));
+    deps.NewGuid().Returns(Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+
+    var vm = new UserViewModel_G(data, deps, baseDeps);
+
+    Assert.That(vm.Name, Is.EqualTo("Base"));
+    Assert.That(vm.Token, Is.EqualTo("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+}
+```
+
+## Full Example
+
+```csharp
+// Legacy source
+public class UserViewModelBase
+{
+    public UserViewModelBase(SomeDataObject someDataObject)
     {
-        Name = "Default";
-        DateTime = DateTime.Now; // Test
+        SomeDataObject = someDataObject;
+        Name = "Base";
+        CreatedAt = DateTime.Now;
         _userService = new UserService();
     }
 
-    public string Name
+    public SomeDataObject SomeDataObject { get; }
+    public string Name { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public string Summary => $"{Name} ({_userService.GetUserName(Name)})";
+
+    private UserService _userService;
+}
+
+public class UserViewModel : UserViewModelBase
+{
+    public UserViewModel(SomeDataObject someDataObject) : base(someDataObject)
     {
-        get;
-        set
-        {
-            field = value;
-            OnPropertyChanged();
-        }
+        Token = Guid.NewGuid().ToString();
     }
 
-    public DateTime DateTime { get; set; }
+    public string Token { get; set; }
+}
+```
 
-    protected override void OnLoad(object? sender, EventArgs e)
-    {
-        base.OnLoad(sender, e);
-        SomePrivateMethod();
-    }
+```csharp
+// Generated base copy
+public class UserViewModelBase_G(SomeDataObject someDataObject, IAutoUserViewModelBaseDependencies dependencies)
+{
+    private readonly IAutoUserViewModelBaseDependencies _dependencies = dependencies;
 
-    private IAutoUserService _userService;
-
-    private void SomePrivateMethod()
-    {
-        Name = "Something to test";
-        _userService.GetUserName(Name);
-    }
+    public SomeDataObject SomeDataObject { get; }
+    public string Name { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public string Summary => $"{Name} ({_dependencies.UserService().GetUserName(Name)})";
 }
 
 /// <summary>Mock this using NSubstitute</summary>
-public interface IAutoUserService
+public interface IAutoUserViewModelBaseDependencies
 {
-    string GetUserName(string userId);
+    Func<DateTime> Now { get; }
+    IAutoUserService UserService();
 }
 ```
+
 ```csharp
-// <auto-generated/>
-using LegacyCodeProject.Core;
-using System.Runtime.CompilerServices;
-
-namespace LegacyCodeProject.Viewmodels;
-public class UserViewModel_G : BaseViewModel_G
+// Generated derived copy
+public class UserViewModel_G(SomeDataObject someDataObject, IAutoUserViewModelDependencies dependencies, IAutoUserViewModelBaseDependencies baseDependencies)
+    : UserViewModelBase_G(someDataObject, baseDependencies)
 {
-    private readonly IAutoUserViewModelDependencies _dependencies;
-    public UserViewModel_G(IAutoUserViewModelDependencies deps, IAutoBaseViewModelDependencies baseDeps) : base(baseDependencies)
-    {
-        _dependencies = deps;
-        Name = "Default";
-        DateTime = _dependencies.Now() /* Original: DateTime.Now */; // Test
-        _userService = _dependencies.UserService(); // Original: new UserService();
-    }
+    private readonly IAutoUserViewModelDependencies _dependencies = dependencies;
 
-    public string Name
-    {
-        get;
-        set
-        {
-            field = value;
-            OnPropertyChanged();
-        }
-    }
-
-    public DateTime DateTime { get; set; }
-
-    public override void OnLoad(object? sender, EventArgs e)
-    {
-        base.OnLoad(sender, e);
-        SomePrivateMethod();
-    }
-
-    private IAutoUserService _userService;
-    public void SomePrivateMethod()  // Original: private void SomePrivateMethod()
-    {
-        Name = "Something to test";
-        _userService.GetUserName(Name);
-    }
+    public string Token { get; set; }
 }
 
 /// <summary>Mock this using NSubstitute</summary>
 public interface IAutoUserViewModelDependencies
 {
-    Func<DateTime> Now { get; }
-
-    void OnPropertyChanged([CallerMemberName] string propertyName = "");
-}
-
-public class BaseViewModel_G(IAutoBaseViewModelDependencies dependencies)
-{
-    public virtual void OnLoad(object? sender, EventArgs e)
-    {
-        dependencies.OnLoad(sender, e);
-    }
-
-    public void OnPropertyChanged([CallerMemberName] string propertyName = "")
-    {
-        dependencies.OnPropertyChanged(propertyName);
-    }
-}
-
-/// <summary>Mock this using NSubstitute</summary>
-public interface IAutoBaseViewModelDependencies
-{
-    void OnLoad(object? sender, EventArgs e);
-}
-
-/// <summary>Mock this using NSubstitute</summary>
-public interface IAutoUserService
-{
-    string GetUserName(string userId);
+    Guid NewGuid();
 }
 ```

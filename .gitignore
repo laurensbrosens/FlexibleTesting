@@ -55,3 +55,5 @@ nunit-*.xml
 .vs/
 
 *.lscache
+README.md
+.dotnet/

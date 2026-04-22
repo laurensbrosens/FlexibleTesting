@@ -16,10 +16,13 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     {
         var rewrittenNode = (ClassDeclarationSyntax)base.VisitClassDeclaration(node)!;
         var updatedNode = rewrittenNode.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
+        var baseType = semanticModel.GetDeclaredSymbol(node)?.ContainingType?.BaseType;
 
-        if (instructions.MockInheritance && updatedNode.BaseList != null)
+        if ((instructions.MockInheritance || instructions.RecursiveMockInheritance) && updatedNode.BaseList != null)
         {
-            var baseClassName = $"{instructions.OldClassName}Base_G";
+            var baseClassName = instructions.RecursiveMockInheritance && baseType != null
+                ? $"{baseType.Name}_G"
+                : $"{instructions.OldClassName}Base_G";
             var newBaseList = updatedNode.BaseList.WithTypes(
                 SyntaxFactory.SeparatedList(
                     new BaseTypeSyntax[] { SyntaxFactory.SimpleBaseType(SyntaxFactory.IdentifierName(baseClassName)) }
@@ -35,6 +38,9 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     {
         var rewrittenNode = (ConstructorDeclarationSyntax)base.VisitConstructorDeclaration(node)!;
         var updatedNode = rewrittenNode.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
+        var containingType = semanticModel.GetDeclaredSymbol(node)?.ContainingType;
+        var hasRealBaseClass = containingType?.BaseType is { SpecialType: not SpecialType.System_Object };
+        var baseTypeName = containingType?.BaseType?.Name;
 
         var dependenciesParamName = instructions.DependenciesParameterName;
         var dependenciesParam = (ParameterSyntax)
@@ -51,14 +57,15 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         var statements = new List<StatementSyntax> { dependenciesAssignment };
         updatedNode = updatedNode.AddParameterListParameters(dependenciesParam);
 
-        if (instructions.MockInheritance)
+        if ((instructions.MockInheritance || instructions.RecursiveMockInheritance) && hasRealBaseClass)
         {
             var baseDepsParamName = "baseDependencies";
+            var baseDepsInterfaceName =
+                instructions.RecursiveMockInheritance && baseTypeName != null
+                    ? $"IAuto{baseTypeName}Dependencies"
+                    : $"IAuto{instructions.OldClassName}BaseDependencies";
             var baseDepsParam = (ParameterSyntax)
-                generator.ParameterDeclaration(
-                    baseDepsParamName,
-                    generator.IdentifierName($"IAuto{instructions.OldClassName}BaseDependencies")
-                );
+                generator.ParameterDeclaration(baseDepsParamName, generator.IdentifierName(baseDepsInterfaceName));
 
             if (updatedNode.Initializer?.IsKind(SyntaxKind.BaseConstructorInitializer) == true)
             {
@@ -81,15 +88,18 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
                 );
             }
 
-            var baseAssignment = (StatementSyntax)
-                generator.ExpressionStatement(
-                    generator.AssignmentStatement(
-                        generator.IdentifierName("_baseDependencies"),
-                        generator.IdentifierName(baseDepsParamName)
-                    )
-                );
             updatedNode = updatedNode.AddParameterListParameters(baseDepsParam);
-            statements.Add(baseAssignment);
+            if (instructions.MockInheritance)
+            {
+                var baseAssignment = (StatementSyntax)
+                    generator.ExpressionStatement(
+                        generator.AssignmentStatement(
+                            generator.IdentifierName("_baseDependencies"),
+                            generator.IdentifierName(baseDepsParamName)
+                        )
+                    );
+                statements.Add(baseAssignment);
+            }
         }
 
         return updatedNode.Body != null

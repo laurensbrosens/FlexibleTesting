@@ -26,6 +26,7 @@ public class FlexibleTestingInstructions
     public string DependenciesFieldName { get; set; } = string.Empty;
     public string DependenciesParameterName { get; set; } = string.Empty;
     public bool MockInheritance { get; set; }
+    public bool RecursiveMockInheritance { get; set; }
 
     public IEnumerable<ISymbol> AllMocks
     {

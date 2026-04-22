@@ -66,6 +66,8 @@ public class Overwrites
 
     public static void MockInheritance() { }
 
+    public static void RecursiveMockInheritance() { }
+
     public static void InheritFrom<TClass>() { }
 }
 """;

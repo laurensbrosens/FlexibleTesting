@@ -7,165 +7,77 @@ using NSubstitute;
 public class UserViewModelTests
 {
     [Test]
-    public void Constructor_WhenInitialized_ShouldSetDefaultName()
+    public void BaseConstructor_WhenInitialized_ShouldApplyRecursiveBaseRewrites()
     {
-        // Arrange
         var data = new SomeDataObject();
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        deps.Now.Returns(() => DateTime.Now);
         var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
-
-        // Act
-        var vm = new UserViewModel_G(data, deps, baseDeps);
-
-        // Assert
-        Assert.That(vm.Name, Is.EqualTo("Default"));
-    }
-
-    [Test]
-    public void Constructor_WhenInitialized_ShouldSetDateTimeFromDependency()
-    {
-        // Arrange
-        var data = new SomeDataObject();
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
         var expectedDate = new DateTime(2026, 4, 15);
-        deps.Now.Returns(() => expectedDate);
-        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+        var expectedService = Substitute.For<IAutoUserService>();
 
-        // Act
-        var vm = new UserViewModel_G(data, deps, baseDeps);
+        baseDeps.Now.Returns(() => expectedDate);
+        baseDeps.UserService().Returns(expectedService);
+        expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
 
-        // Assert
-        Assert.That(vm.DateTime, Is.EqualTo(expectedDate));
-    }
+        var vm = new UserViewModelBase_G(data, baseDeps);
 
-    [Test]
-    public void NameProperty_WhenSet_ShouldInvokeOnPropertyChanged()
-    {
-        // Arrange
-        var data = new SomeDataObject();
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        deps.Now.Returns(() => DateTime.Now);
-        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
-        var vm = new UserViewModel_G(data, deps, baseDeps);
-
-        // Act
-        vm.Name = "Changed Name";
-
-        // Assert
-        baseDeps.Received().OnPropertyChanged("Name");
-    }
-
-    [Test]
-    public void SomePrivateMethod_WhenCalled_ShouldUpdateNameProperty()
-    {
-        // Arrange
-        var data = new SomeDataObject();
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        deps.Now.Returns(() => DateTime.Now);
-        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
-        var vm = new UserViewModel_G(data, deps, baseDeps);
-
-        // Act
-        vm.SomePrivateMethod();
-
-        // Assert
-        Assert.That(vm.Name, Is.EqualTo("Something to test"));
-    }
-
-    [Test]
-    public void Constructor_Sets_InitialValues_And_Mocks_StaticCalls()
-    {
-        // Arrange
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
-        var data = new SomeDataObject();
-        var expectedDate = new DateTime(2026, 4, 15);
-
-        deps.Now.Returns(() => expectedDate);
-
-        // Act
-        var vm = new UserViewModel_G(data, deps, baseDeps);
-
-        // Assert
         Assert.Multiple(() =>
         {
-            Assert.That(vm.Name, Is.EqualTo("Default"));
-            Assert.That(vm.DateTime, Is.EqualTo(expectedDate));
+            Assert.That(vm, Is.TypeOf<UserViewModelBase_G>());
+            Assert.That(vm.Name, Is.EqualTo("Base"));
+            Assert.That(vm.CreatedAt, Is.EqualTo(expectedDate));
+            Assert.That(vm.SomeDataObject, Is.SameAs(data));
+            Assert.That(vm.Summary, Is.EqualTo("Base (base-user)"));
         });
     }
 
     [Test]
-    public void Setting_Name_Triggers_OnPropertyChanged_On_BaseDependencies()
+    public void DerivedConstructor_WhenInitialized_ShouldInheritFromGeneratedBase()
     {
-        // Arrange
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
         var data = new SomeDataObject();
-        deps.Now.Returns(() => DateTime.Now);
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var expectedDate = new DateTime(2026, 4, 16);
+        var expectedGuid = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var expectedService = Substitute.For<IAutoUserService>();
+
+        baseDeps.Now.Returns(() => expectedDate);
+        baseDeps.UserService().Returns(expectedService);
+        deps.NewGuid().Returns(expectedGuid);
+        expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
+
         var vm = new UserViewModel_G(data, deps, baseDeps);
 
-        // Act
-        vm.Name = "Changed Name";
-
-        // Assert
-        baseDeps.Received().OnPropertyChanged("Name");
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm, Is.InstanceOf<UserViewModelBase_G>());
+            Assert.That(vm.Name, Is.EqualTo("Base"));
+            Assert.That(vm.CreatedAt, Is.EqualTo(expectedDate));
+            Assert.That(vm.Token, Is.EqualTo(expectedGuid.ToString()));
+        });
     }
 
     [Test]
-    public void Constructor_Calls_OnPropertyChanged()
+    public void RecursiveBaseAndDerivedDependencies_ShouldStaySeparated()
     {
-        // Arrange
         var data = new SomeDataObject();
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        deps.Now.Returns(() => DateTime.Now);
         var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var expectedGuid = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        var expectedService = Substitute.For<IAutoUserService>();
 
-        // Act
+        baseDeps.Now.Returns(() => new DateTime(2026, 4, 17));
+        baseDeps.UserService().Returns(expectedService);
+        deps.NewGuid().Returns(expectedGuid);
+        expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
+
         var vm = new UserViewModel_G(data, deps, baseDeps);
 
-        // Assert
-        // Constructor calls OnPropertyChanged() at the end
-        baseDeps.Received().OnPropertyChanged(Arg.Any<string>());
-    }
-
-    [Test]
-    public void OnPropertyChanged_Is_Mockable_Through_BaseDependencies()
-    {
-        // Arrange
-        var data = new SomeDataObject();
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        deps.Now.Returns(() => DateTime.Now);
-        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
-        var vm = new UserViewModel_G(data, deps, baseDeps);
-
-        baseDeps.ClearReceivedCalls();
-
-        // Act
-        vm.OnPropertyChanged("TestProperty");
-
-        // Assert
-        baseDeps.Received(1).OnPropertyChanged("TestProperty");
-    }
-
-    [Test]
-    public void NameProperty_Get_Also_Triggers_OnPropertyChanged()
-    {
-        // Arrange
-        var data = new SomeDataObject();
-        var deps = Substitute.For<IAutoUserViewModelDependencies>();
-        deps.Now.Returns(() => DateTime.Now);
-        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
-        var vm = new UserViewModel_G(data, deps, baseDeps);
-
-        baseDeps.ClearReceivedCalls();
-
-        // Act
-        var name = vm.Name;
-
-        // Assert
-        // The getter calls OnPropertyChanged
-        baseDeps.Received().OnPropertyChanged(Arg.Any<string>());
-        Assert.That(name, Is.EqualTo("Default"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Summary, Is.EqualTo("Base (base-user)"));
+            Assert.That(vm.Token, Is.EqualTo(expectedGuid.ToString()));
+            baseDeps.Received(1).UserService();
+            deps.Received(1).NewGuid();
+        });
     }
 }

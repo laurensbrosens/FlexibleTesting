@@ -22,7 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="Microsoft.Build" />
+    <Reference Include="Microsoft.Build" Condition="'$(TargetFramework)' == 'net472'" />
   </ItemGroup>
 
 </Project>
