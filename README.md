@@ -14,7 +14,7 @@ internal class UserViewModelBuilder : IGeneratorInstructions
     {
         Overwrites.ForClass<UserViewModel>(); // Class to copy
         Overwrites.MockInheritance(); // Mock parent class automatically
-        Overwrites.Mockable(() => DateTime.Now); // Add methods to mock
+        Overwrites.Mock(() => DateTime.Now); // Add methods to mock
         Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad); // Add methods to make public
     }
 }
@@ -26,7 +26,7 @@ internal class UserViewModelBuilder : IGeneratorInstructions
 Redirect problematic static calls (like `DateTime.Now` or `Guid.NewGuid`) to a mockable dependency.
 ```csharp
 // In Builder:
-Overwrites.Mockable(() => DateTime.Now);
+Overwrites.Mock(() => DateTime.Now);
 
 // In Test:
 _dependencies.Now().Returns(new DateTime(2026, 4, 14));
@@ -91,9 +91,9 @@ internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewMod
     public void Configure()
     {
         Overwrites.ForClass<UserViewModel>();
-        Overwrites.Mockable(() => DateTime.Now);
-        // Overwrites.Mockable(() => OnPropertyChanged); MockInheritance already handles this
-        Overwrites.Mockable(() => SomePrivateMethod);
+        Overwrites.Mock(() => DateTime.Now);
+        // Overwrites.Mock(() => OnPropertyChanged); MockInheritance already handles this
+        Overwrites.Mock(() => SomePrivateMethod);
         Overwrites.Mock<UserService>();
         Overwrites.MockInheritance();
         Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad);

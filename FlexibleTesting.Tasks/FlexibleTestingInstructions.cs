@@ -11,9 +11,9 @@ public class FlexibleTestingInstructions
 
     public HashSet<IMethodSymbol> MethodsToMakePublic { get; } = new(SymbolSignatureComparer.Default);
 
-    public HashSet<IMethodSymbol> MockableMethods { get; } = new(SymbolSignatureComparer.Default);
-    public HashSet<IPropertySymbol> MockableProperties { get; } = new(SymbolSignatureComparer.Default);
-    public HashSet<IFieldSymbol> MockableFields { get; } = new(SymbolSignatureComparer.Default);
+    public HashSet<IMethodSymbol> MockMethods { get; } = new(SymbolSignatureComparer.Default);
+    public HashSet<IPropertySymbol> MockProperties { get; } = new(SymbolSignatureComparer.Default);
+    public HashSet<IFieldSymbol> MockFields { get; } = new(SymbolSignatureComparer.Default);
 
     /// <summary>
     /// Maps a symbol to its unique name in the dependencies interface.
@@ -25,15 +25,15 @@ public class FlexibleTestingInstructions
     public string DependenciesParameterName { get; set; } = string.Empty;
     public bool MockInheritance { get; set; }
 
-    public IEnumerable<ISymbol> AllMockables
+    public IEnumerable<ISymbol> AllMocks
     {
         get
         {
-            foreach (var method in MockableMethods)
+            foreach (var method in MockMethods)
                 yield return method;
-            foreach (var property in MockableProperties)
+            foreach (var property in MockProperties)
                 yield return property;
-            foreach (var @field in MockableFields)
+            foreach (var @field in MockFields)
                 yield return @field;
         }
     }

@@ -30,10 +30,9 @@ public interface IAutoUserViewModelBaseDependencies
     void OnLoad(object? sender, EventArgs e);
 }
 
-[SomeTestAttribute]
 public class UserViewModel_G : UserViewModelBase_G
 {
-    public UserViewModel_G([SomeTestAttribute] SomeDataObject someDataObject, IAutoUserViewModelDependencies dependencies, IAutoUserViewModelBaseDependencies baseDependencies) : base(someDataObject, baseDependencies)
+    public UserViewModel_G(SomeDataObject someDataObject, IAutoUserViewModelDependencies dependencies, IAutoUserViewModelBaseDependencies baseDependencies) : base(someDataObject, baseDependencies)
     {
         _dependencies = dependencies;
         _baseDependencies = baseDependencies;
@@ -66,7 +65,7 @@ public class UserViewModel_G : UserViewModelBase_G
 
     public DateTime DateTime { get; set; }
 
-    public override void OnLoad(object? sender, [SomeTestAttribute] EventArgs e)
+    public override void OnLoad(object? sender, EventArgs e)
     {
         base.OnLoad(sender, e);
         SomePrivateMethod();

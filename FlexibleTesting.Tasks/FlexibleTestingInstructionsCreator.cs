@@ -80,8 +80,8 @@ public class FlexibleTestingInstructionsCreator
                 case nameof(Overwrites.MakePublic):
                     AddToMakePublic(model, instructions.MethodsToMakePublic, instructionMethod);
                     break;
-                case nameof(Overwrites.Mockable):
-                    AddToMockable(model, instructions, instructionMethod);
+                case nameof(Overwrites.Mock):
+                    AddToMock(model, instructions, instructionMethod);
                     break;
                 case nameof(Overwrites.MockInheritance):
                     instructions.MockInheritance = true;
@@ -125,7 +125,7 @@ public class FlexibleTestingInstructionsCreator
         }
     }
 
-    private void AddToMockable(SemanticModel model, FlexibleTestingInstructions instructions, InvocationExpressionSyntax invocation)
+    private void AddToMock(SemanticModel model, FlexibleTestingInstructions instructions, InvocationExpressionSyntax invocation)
     {
         var arg = invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression;
         ISymbol? symbol = null;
@@ -156,11 +156,11 @@ public class FlexibleTestingInstructionsCreator
             symbol = model.GetSymbolInfo(id).Symbol;
 
         if (symbol is IMethodSymbol m)
-            instructions.MockableMethods.Add(m);
+            instructions.MockMethods.Add(m);
         else if (symbol is IPropertySymbol p)
-            instructions.MockableProperties.Add(p);
+            instructions.MockProperties.Add(p);
         else if (symbol is IFieldSymbol f)
-            instructions.MockableFields.Add(f);
+            instructions.MockFields.Add(f);
 
         if (symbol != null)
             instructions.DependencyMemberNames[symbol] = symbol.Name;

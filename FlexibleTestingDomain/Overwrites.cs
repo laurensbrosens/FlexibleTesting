@@ -10,7 +10,7 @@ public class Overwrites
     public static void Replace<TDelegate>(TDelegate target, TDelegate replacement)
         where TDelegate : Delegate { }
 
-    public static void Mockable<TDelegate>(TDelegate value)
+    public static void Mock<TDelegate>(TDelegate value)
         where TDelegate : Delegate { }
 
     public static void MakePublic<TInterface, TDelegate>(Expression<Func<TInterface, TDelegate>> methodSelector)

@@ -14,12 +14,12 @@ internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewMod
         Overwrites.Mock<UserService>(); // Automatically create a fake implementation using an interface, UserService => IUserService, and redirect calls to the fake
         Overwrites.MockInheritance(); // Automatically create a fake base class if needed, could be combined with InheritFrom?
         Overwrites.InheritFrom<FakeBaseViewModel>(); // Developer provided fake base, usefull for base classes that are used a lot
-        Overwrites.Mockable(() => DateTime.Now);
-        Overwrites.Mockable(() => Now);
-        Overwrites.Mockable(DoesThisEvenWork);
+        Overwrites.Mock(() => DateTime.Now);
+        Overwrites.Mock(() => Now);
+        Overwrites.Mock(DoesThisEvenWork);
         Overwrites.MakePublic(OnPropertyChanged);
         Overwrites.MakePublic(OnLoad);
-        //Overwrites.Mockable(() => DateTime.Today);
+        //Overwrites.Mock(() => DateTime.Today);
         // Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad); // Don't need IShadow, does not work for private of course, but works for protected, internal and protected internal
         Overwrites.MakePublic<IShadow, Action>(x => x.SomePrivateMethod);
         // Overwrites.MakePublic("OnLoad"); I want to prevent allowing string based API
@@ -36,7 +36,7 @@ public class BaseBuilder : IGeneratorInstructions
     public void Configure()
     {
         Overwrites.ReplaceProperty<Func<DateTime>>(() => DateTime.Now, () => TestClock.Now);
-        Overwrites.Mockable<Func<string, string>>(File.ReadAllText);
+        Overwrites.Mock<Func<string, string>>(File.ReadAllText);
         Overwrites.Replace(s => s.IsValidEmail(), TestEmail.IsValidEmail);
     }
 }

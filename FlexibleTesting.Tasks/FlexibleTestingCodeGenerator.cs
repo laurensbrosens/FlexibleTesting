@@ -178,7 +178,7 @@ public class FlexibleTestingCodeGenerator
 
     private SyntaxNode BuildDependenciesInterface(SyntaxGenerator gen, FlexibleTestingInstructions instructions, Compilation comp)
     {
-        var members = instructions.AllMockables.Select(mockable =>
+        var members = instructions.AllMocks.Select(mockable =>
         {
             var name = instructions.DependencyMemberNames[mockable];
             if (mockable is IMethodSymbol method)
