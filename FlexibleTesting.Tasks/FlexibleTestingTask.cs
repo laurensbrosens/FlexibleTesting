@@ -17,7 +17,7 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
     {
         try
         {
-            System.Diagnostics.Debugger.Launch();
+            // System.Diagnostics.Debugger.Launch();
 
             OutputPath = string.IsNullOrWhiteSpace(OutputPath)
                 ? Path.GetFullPath(Path.Combine(Path.GetDirectoryName(BuildEngine.ProjectFileOfTaskNode)!, "Generated"))
