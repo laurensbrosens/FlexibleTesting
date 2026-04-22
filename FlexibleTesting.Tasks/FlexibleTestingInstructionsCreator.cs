@@ -1,8 +1,11 @@
 using FlexibleTestingDomain;
+using ICSharpCode.Decompiler;
+using ICSharpCode.Decompiler.CSharp;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 
 namespace FlexibleTesting.Tasks;
@@ -109,11 +112,23 @@ public class FlexibleTestingInstructionsCreator
         if (targetTypeFromTest == null || targetTypeFromTest.TypeKind == TypeKind.Error)
             return null;
 
-        if (targetTypeFromTest.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not ClassDeclarationSyntax targetClassNode)
-            return null;
+        ClassDeclarationSyntax? targetClassNode = null;
+        Document? targetDocument = null;
 
-        var targetDocument = _solution.GetDocument(targetClassNode.SyntaxTree);
-        if (targetDocument == null)
+        var syntaxRef = targetTypeFromTest.DeclaringSyntaxReferences.FirstOrDefault();
+        if (syntaxRef != null)
+        {
+            targetClassNode = syntaxRef.GetSyntax() as ClassDeclarationSyntax;
+            targetDocument = _solution.GetDocument(targetClassNode!.SyntaxTree);
+        }
+        else
+        {
+            var decompilationResult = TryDecompile(targetTypeFromTest);
+            targetClassNode = decompilationResult.node;
+            targetDocument = decompilationResult.doc;
+        }
+
+        if (targetClassNode == null || targetDocument == null)
             return null;
 
         var targetCompilation = targetDocument.Project.GetCompilationAsync().Result;
@@ -150,6 +165,46 @@ public class FlexibleTestingInstructionsCreator
         MapMockClassConstructors(instructions, targetClassNode, targetDocument);
 
         return instructions;
+    }
+
+    private (ClassDeclarationSyntax? node, Document? doc) TryDecompile(INamedTypeSymbol symbol)
+    {
+        var assemblyReference = _testCompilation.GetMetadataReference(symbol.ContainingAssembly) as PortableExecutableReference;
+        if (assemblyReference == null || string.IsNullOrEmpty(assemblyReference.FilePath))
+            return (null, null);
+
+        string dllPath = assemblyReference.FilePath;
+        if (dllPath.Contains($"{Path.DirectorySeparatorChar}ref{Path.DirectorySeparatorChar}"))
+            dllPath = dllPath.Replace(
+                $"{Path.DirectorySeparatorChar}ref{Path.DirectorySeparatorChar}",
+                $"{Path.DirectorySeparatorChar}lib{Path.DirectorySeparatorChar}"
+            );
+        if (!File.Exists(dllPath))
+            return (null, null);
+
+        var decompiler = new CSharpDecompiler(dllPath, new DecompilerSettings());
+
+        string reflectionName = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        var fullTypeName = new ICSharpCode.Decompiler.TypeSystem.FullTypeName(reflectionName);
+
+        var typeDef = decompiler.TypeSystem.MainModule.GetTypeDefinition(fullTypeName.TopLevelTypeName);
+        if (typeDef == null)
+            return (null, null);
+
+        string code = decompiler.DecompileTypeAsString(fullTypeName);
+
+        var projectId = ProjectId.CreateNewId();
+        var docId = DocumentId.CreateNewId(projectId);
+
+        var solutionWithDoc = _solution
+            .AddProject(projectId, $"Decompiled_{symbol.Name}", $"Decompiled_{symbol.Name}", LanguageNames.CSharp)
+            .AddDocument(docId, $"{symbol.Name}_Decompiled.cs", code);
+
+        var virtualDoc = solutionWithDoc.GetDocument(docId);
+        var root = virtualDoc?.GetSyntaxRootAsync().GetAwaiter().GetResult();
+        var node = root?.DescendantNodesAndSelf().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+
+        return (node, virtualDoc);
     }
 
     private void ValidateRecursiveInheritance(IReadOnlyList<FlexibleTestingInstructions> instructionsList)
@@ -189,9 +244,7 @@ public class FlexibleTestingInstructionsCreator
         var baseMetadataName = GetTypeMetadataName(baseType.OriginalDefinition);
         if (!traversalStack.Add(baseMetadataName))
         {
-            throw new InvalidOperationException(
-                $"Recursive inheritance cycle detected while resolving '{instructions.TargetType.Name}'."
-            );
+            throw new InvalidOperationException($"Recursive inheritance cycle detected while resolving '{instructions.TargetType.Name}'.");
         }
 
         if (!byTargetMetadataName.TryGetValue(baseMetadataName, out var baseInstructions))
@@ -201,7 +254,7 @@ public class FlexibleTestingInstructionsCreator
             );
         }
 
-        if (!baseInstructions.RecursiveMockInheritance && baseType.BaseType is { SpecialType: not SpecialType.System_Object } )
+        if (!baseInstructions.RecursiveMockInheritance && baseType.BaseType is { SpecialType: not SpecialType.System_Object })
         {
             throw new InvalidOperationException(
                 $"Builder '{baseInstructions.TargetType.Name}' must also call RecursiveMockInheritance() because it has a non-object base type."
@@ -293,11 +346,7 @@ public class FlexibleTestingInstructionsCreator
             instructions.DependencyMemberNames[symbol] = symbol.Name;
     }
 
-    private void AddClassMock(
-        FlexibleTestingInstructions instructions,
-        IMethodSymbol methodSymbol,
-        InvocationExpressionSyntax invocation
-    )
+    private void AddClassMock(FlexibleTestingInstructions instructions, IMethodSymbol methodSymbol, InvocationExpressionSyntax invocation)
     {
         if (invocation.ArgumentList.Arguments.Count > 0)
             return;
