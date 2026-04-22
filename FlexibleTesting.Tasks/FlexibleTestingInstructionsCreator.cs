@@ -81,6 +81,7 @@ public class FlexibleTestingInstructionsCreator
                     AddToMakePublic(model, instructions.MethodsToMakePublic, instructionMethod);
                     break;
                 case nameof(Overwrites.Mock):
+                    AddClassMock(instructions, methodSymbol, instructionMethod);
                     AddToMock(model, instructions, instructionMethod);
                     break;
                 case nameof(Overwrites.MockInheritance):
@@ -105,6 +106,7 @@ public class FlexibleTestingInstructionsCreator
         instructions.DependenciesInterfaceName = $"IAuto{oldName}Dependencies";
 
         MapMethodsToLegacy(instructions);
+        MapMockClassConstructors(instructions, targetClassNode);
 
         return instructions;
     }
@@ -161,9 +163,55 @@ public class FlexibleTestingInstructionsCreator
             instructions.MockProperties.Add(p);
         else if (symbol is IFieldSymbol f)
             instructions.MockFields.Add(f);
+        else if (symbol is INamedTypeSymbol namedType && namedType.TypeKind == TypeKind.Class)
+        {
+            instructions.MockClasses.Add(namedType);
+            instructions.DependencyMemberNames[namedType] = namedType.Name;
+        }
 
         if (symbol != null)
             instructions.DependencyMemberNames[symbol] = symbol.Name;
+    }
+
+    private void AddClassMock(
+        FlexibleTestingInstructions instructions,
+        IMethodSymbol methodSymbol,
+        InvocationExpressionSyntax invocation
+    )
+    {
+        if (invocation.ArgumentList.Arguments.Count > 0)
+            return;
+
+        if (methodSymbol.TypeArguments.FirstOrDefault() is not INamedTypeSymbol mockType || mockType.TypeKind != TypeKind.Class)
+            return;
+
+        var legacyMockType = _legacyCompilation.GetTypeByMetadataName(GetTypeMetadataName(mockType));
+        if (legacyMockType == null)
+            return;
+
+        instructions.MockClasses.Add(legacyMockType);
+        instructions.DependencyMemberNames[legacyMockType] = legacyMockType.Name;
+    }
+
+    private void MapMockClassConstructors(
+        FlexibleTestingInstructions instructions,
+        ClassDeclarationSyntax targetClassNode
+    )
+    {
+        var mockedTypes = instructions.MockClasses;
+        if (!mockedTypes.Any())
+            return;
+
+        var legacyModel = _legacyCompilation.GetSemanticModel(targetClassNode.SyntaxTree);
+
+        foreach (var creation in targetClassNode.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
+        {
+            if (legacyModel.GetSymbolInfo(creation).Symbol is not IMethodSymbol ctor)
+                continue;
+
+            if (mockedTypes.Any(t => SymbolEqualityComparer.Default.Equals(t, ctor.ContainingType)))
+                instructions.MockClassConstructors.Add(ctor);
+        }
     }
 
     private void MapMethodsToLegacy(FlexibleTestingInstructions instructions)

@@ -109,7 +109,10 @@ public class FlexibleTestingCodeGenerator
             );
         }
 
-        editor.InsertAfter(classNode, BuildDependenciesInterface(gen, instructions, comp));
+        var siblingMembers = new List<SyntaxNode> { BuildDependenciesInterface(gen, instructions, comp) };
+        siblingMembers.AddRange(instructions.MockClasses.OrderBy(t => t.Name).Select(mockedClass => BuildMockClassInterface(gen, instructions, mockedClass)));
+
+        editor.InsertAfter(classNode, siblingMembers);
     }
 
     private bool AddBaseClassReplacement(
@@ -224,7 +227,127 @@ public class FlexibleTestingCodeGenerator
             return propDecl;
         });
 
-        return gen.InterfaceDeclaration(instructions.DependenciesInterfaceName, accessibility: Accessibility.Public, members: members)
+        var classMockMembers = instructions.MockClasses.SelectMany(mockedType =>
+        {
+            var mockTypeInterfaceName = GetMockClassInterfaceName(mockedType);
+            return instructions.MockClassConstructors
+                .Where(ctor => SymbolEqualityComparer.Default.Equals(ctor.ContainingType, mockedType))
+                .Select(ctor =>
+                {
+                    var parameters = ctor.Parameters.Select(p =>
+                    {
+                        var decl = (ParameterSyntax)gen.ParameterDeclaration(p.Name, gen.TypeExpression(p.Type));
+                        var attributes = GetAttributeSyntax(p);
+                        foreach (var attr in attributes)
+                            decl = (ParameterSyntax)gen.AddAttributes(decl, attr);
+
+                        if (p.HasExplicitDefaultValue)
+                            decl = decl.WithDefault(
+                                SyntaxFactory.EqualsValueClause(
+                                    p.ExplicitDefaultValue == null
+                                        ? SyntaxFactory.LiteralExpression(SyntaxKind.NullLiteralExpression)
+                                        : (ExpressionSyntax)gen.LiteralExpression(p.ExplicitDefaultValue)
+                                )
+                            );
+                        return decl;
+                    });
+
+                    var methodDecl = (MethodDeclarationSyntax)
+                        gen.MethodDeclaration(
+                            mockedType.Name,
+                            parameters: parameters,
+                            returnType: SyntaxFactory.ParseTypeName(mockTypeInterfaceName),
+                            accessibility: Accessibility.Public
+                        );
+
+                    var ctorAttributes = GetAttributeSyntax(ctor);
+                    foreach (var attr in ctorAttributes)
+                        methodDecl = (MethodDeclarationSyntax)gen.AddAttributes(methodDecl, attr);
+
+                    return (MemberDeclarationSyntax)methodDecl;
+                });
+        });
+
+        return gen
+            .InterfaceDeclaration(
+                instructions.DependenciesInterfaceName,
+                accessibility: Accessibility.Public,
+                members: members.Concat(classMockMembers)
+            )
+            .WithLeadingTrivia(SyntaxFactory.TriviaList(SyntaxFactory.Comment("/// <summary>Mock this using NSubstitute</summary>")));
+    }
+
+    private SyntaxNode BuildMockClassInterface(SyntaxGenerator gen, FlexibleTestingInstructions instructions, INamedTypeSymbol mockedType)
+    {
+        var members = new List<MemberDeclarationSyntax>();
+
+        foreach (var member in mockedType.GetMembers().Where(m => !m.IsStatic))
+        {
+            switch (member)
+            {
+                case IMethodSymbol method when method.MethodKind == MethodKind.Ordinary:
+                {
+                    var parameters = method.Parameters.Select(p =>
+                    {
+                        var decl = (ParameterSyntax)gen.ParameterDeclaration(p.Name, GetTypeNameSyntax(p.Type));
+                        var attributes = GetAttributeSyntax(p);
+                        foreach (var attr in attributes)
+                            decl = (ParameterSyntax)gen.AddAttributes(decl, attr);
+
+                        if (p.HasExplicitDefaultValue)
+                            decl = decl.WithDefault(
+                                SyntaxFactory.EqualsValueClause(
+                                    p.ExplicitDefaultValue == null
+                                        ? SyntaxFactory.LiteralExpression(SyntaxKind.NullLiteralExpression)
+                                        : (ExpressionSyntax)gen.LiteralExpression(p.ExplicitDefaultValue)
+                                )
+                            );
+                        return decl;
+                    });
+
+                    var methodDecl = (MethodDeclarationSyntax)
+                        gen.MethodDeclaration(
+                            method.Name,
+                            parameters: parameters,
+                            returnType: GetTypeNameSyntax(method.ReturnType),
+                            accessibility: Accessibility.Public
+                        );
+
+                    var methodAttributes = GetAttributeSyntax(method);
+                    foreach (var attr in methodAttributes)
+                        methodDecl = (MethodDeclarationSyntax)gen.AddAttributes(methodDecl, attr);
+
+                    members.Add(methodDecl);
+                    break;
+                }
+                case IPropertySymbol property:
+                {
+                    var propertyDecl = (PropertyDeclarationSyntax)
+                        gen.PropertyDeclaration(
+                            property.Name,
+                            GetTypeNameSyntax(property.Type),
+                            accessibility: Accessibility.Public
+                        );
+
+                    var accessors = new List<AccessorDeclarationSyntax>();
+                    if (property.GetMethod != null)
+                        accessors.Add(SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration, SyntaxFactory.Block()));
+                    if (property.SetMethod != null)
+                        accessors.Add(SyntaxFactory.AccessorDeclaration(SyntaxKind.SetAccessorDeclaration, SyntaxFactory.Block()));
+                    propertyDecl = propertyDecl.WithAccessorList(SyntaxFactory.AccessorList(SyntaxFactory.List(accessors)));
+
+                    var propertyAttributes = GetAttributeSyntax(property);
+                    foreach (var attr in propertyAttributes)
+                        propertyDecl = (PropertyDeclarationSyntax)gen.AddAttributes(propertyDecl, attr);
+
+                    members.Add(propertyDecl);
+                    break;
+                }
+            }
+        }
+
+        return gen
+            .InterfaceDeclaration(GetMockClassInterfaceName(mockedType), accessibility: Accessibility.Public, members: members)
             .WithLeadingTrivia(SyntaxFactory.TriviaList(SyntaxFactory.Comment("/// <summary>Mock this using NSubstitute</summary>")));
     }
 
@@ -442,6 +565,8 @@ public class FlexibleTestingCodeGenerator
             ? SyntaxFactory.NullableType(syntax)
             : syntax;
     }
+
+    private string GetMockClassInterfaceName(INamedTypeSymbol mockedType) => $"IAuto{mockedType.Name}";
 
     private List<ISymbol> ExtractUsedBaseMembers(ClassDeclarationSyntax derivedNode, INamedTypeSymbol targetSymbol, SemanticModel model)
     {

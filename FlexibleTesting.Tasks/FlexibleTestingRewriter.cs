@@ -122,6 +122,24 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         return base.VisitInvocationExpression(node);
     }
 
+    public override SyntaxNode? VisitObjectCreationExpression(ObjectCreationExpressionSyntax node)
+    {
+        var constructor = semanticModel.GetSymbolInfo(node).Symbol as IMethodSymbol;
+        var containingType = constructor?.ContainingType;
+        if (containingType != null && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, containingType)))
+        {
+            var dependencyName = containingType.Name;
+            var arguments = node.ArgumentList?.Arguments.Select(a => a.Expression) ?? Enumerable.Empty<ExpressionSyntax>();
+            return generator
+                .InvocationExpression(
+                    generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName),
+                    arguments
+                )
+                .WithTriviaFrom(node);
+        }
+        return base.VisitObjectCreationExpression(node);
+    }
+
     public override SyntaxNode? VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
     {
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
@@ -136,5 +154,34 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         return base.VisitMemberAccessExpression(node);
     }
 
+    public override SyntaxNode? VisitIdentifierName(IdentifierNameSyntax node)
+    {
+        var symbol = semanticModel.GetSymbolInfo(node).Symbol;
+        if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
+            return SyntaxFactory.IdentifierName(GetMockClassInterfaceName(namedType)).WithTriviaFrom(node);
+
+        return base.VisitIdentifierName(node);
+    }
+
+    public override SyntaxNode? VisitQualifiedName(QualifiedNameSyntax node)
+    {
+        var symbol = semanticModel.GetSymbolInfo(node).Symbol;
+        if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
+            return SyntaxFactory.IdentifierName(GetMockClassInterfaceName(namedType)).WithTriviaFrom(node);
+
+        return base.VisitQualifiedName(node);
+    }
+
+    public override SyntaxNode? VisitAliasQualifiedName(AliasQualifiedNameSyntax node)
+    {
+        var symbol = semanticModel.GetSymbolInfo(node).Symbol;
+        if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
+            return SyntaxFactory.IdentifierName(GetMockClassInterfaceName(namedType)).WithTriviaFrom(node);
+
+        return base.VisitAliasQualifiedName(node);
+    }
+
     private void CheckForCallerMemberName(ISymbol symbol) { }
+
+    private string GetMockClassInterfaceName(INamedTypeSymbol mockedType) => $"IAuto{mockedType.Name}";
 }

@@ -40,7 +40,7 @@ public class UserViewModel_G : UserViewModelBase_G
         DateTime = _dependencies.Now(); // Test
         Now = _dependencies.Now();
         DateTime = Now; // Test 2
-        _userService = new UserService();
+        _userService = _dependencies.UserService();
         _dependencies.DoesThisEvenWork();
         OnPropertyChanged();
     }
@@ -77,7 +77,7 @@ public class UserViewModel_G : UserViewModelBase_G
         throw new Exception("Bad side effect");
     }
 
-    private UserService _userService;
+    private IAutoUserService _userService;
     public void SomePrivateMethod()
     {
         Name = "Something to test";
@@ -93,4 +93,12 @@ public interface IAutoUserViewModelDependencies
 {
     void DoesThisEvenWork();
     Func<DateTime> Now { get; set; }
+
+    IAutoUserService UserService();
+}
+
+/// <summary>Mock this using NSubstitute</summary>
+public interface IAutoUserService
+{
+    string GetUserName(string userId);
 }

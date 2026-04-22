@@ -46,7 +46,7 @@ Overwrites.MockInheritance();
 class UserViewModel_G : BaseViewModel_G // instead of : BaseViewModel
 ```
 
-### Mocking Internal Services (Not implemented yet)
+### Mocking Internal Services
 Automatically generate an interface for a concrete legacy service and redirect all usages.
 ```csharp
 Overwrites.Mock<UserService>(); 
@@ -127,13 +127,19 @@ public class UserViewModel : BaseViewModel
         SomePrivateMethod();
     }
 
-    private UserService _userService;
+    private IAutoUserService _userService;
 
     private void SomePrivateMethod()
     {
         Name = "Something to test";
         _userService.GetUserName(Name);
     }
+}
+
+/// <summary>Mock this using NSubstitute</summary>
+public interface IAutoUserService
+{
+    string GetUserName(string userId);
 }
 ```
 ```csharp
@@ -171,7 +177,7 @@ public class UserViewModel_G : BaseViewModel_G
         SomePrivateMethod();
     }
 
-    private UserService _userService;
+    private IAutoUserService _userService;
     public void SomePrivateMethod()  // Original: private void SomePrivateMethod()
     {
         Name = "Something to test";
@@ -204,5 +210,11 @@ public class BaseViewModel_G(IAutoBaseViewModelDependencies dependencies)
 public interface IAutoBaseViewModelDependencies
 {
     void OnLoad(object? sender, EventArgs e);
+}
+
+/// <summary>Mock this using NSubstitute</summary>
+public interface IAutoUserService
+{
+    string GetUserName(string userId);
 }
 ```
