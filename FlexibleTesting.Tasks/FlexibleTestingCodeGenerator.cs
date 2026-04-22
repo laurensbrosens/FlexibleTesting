@@ -151,34 +151,29 @@ public class FlexibleTestingCodeGenerator
 
     private IEnumerable<AttributeSyntax> GetAttributeSyntax(ISymbol symbol)
     {
-        return symbol
-            .GetAttributes()
-            .Select(a =>
-            {
-                if (a.AttributeClass != null && !a.AttributeClass.ContainingNamespace.IsGlobalNamespace)
-                {
-                    _requiredNamespaces.Add(a.AttributeClass.ContainingNamespace.ToDisplayString());
-                }
+        return symbol.GetAttributes().Select(TransformAttribute);
+    }
 
-                return SyntaxFactory
-                    .Attribute(SyntaxFactory.ParseName(a.AttributeClass!.Name))
-                    .WithArgumentList(
-                        a.ConstructorArguments.Length > 0
-                            ? SyntaxFactory.AttributeArgumentList(
-                                SyntaxFactory.SeparatedList(
-                                    a.ConstructorArguments.Select(arg =>
-                                        SyntaxFactory.AttributeArgument(
-                                            SyntaxFactory.LiteralExpression(
-                                                SyntaxKind.StringLiteralExpression,
-                                                SyntaxFactory.Literal(arg.Value?.ToString() ?? "")
-                                            )
-                                        )
-                                    )
-                                )
-                            )
-                            : null
-                    );
-            });
+    private AttributeSyntax TransformAttribute(AttributeData attribute)
+    {
+        var ns = attribute.AttributeClass?.ContainingNamespace;
+        if (ns is { IsGlobalNamespace: false })
+        {
+            _requiredNamespaces.Add(ns.ToDisplayString());
+        }
+
+        var name = SyntaxFactory.ParseName(attribute.AttributeClass!.Name);
+        var arguments = attribute
+            .ConstructorArguments.Select(arg =>
+                SyntaxFactory.AttributeArgument(
+                    SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(arg.Value?.ToString() ?? ""))
+                )
+            )
+            .ToArray();
+
+        return arguments.Any()
+            ? SyntaxFactory.Attribute(name).WithArgumentList(SyntaxFactory.AttributeArgumentList(SyntaxFactory.SeparatedList(arguments)))
+            : SyntaxFactory.Attribute(name);
     }
 
     private SyntaxNode BuildDependenciesInterface(SyntaxGenerator gen, FlexibleTestingInstructions instructions, Compilation comp)
