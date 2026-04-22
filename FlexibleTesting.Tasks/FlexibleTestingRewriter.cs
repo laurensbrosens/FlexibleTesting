@@ -39,7 +39,7 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         var dependenciesParamName = instructions.DependenciesParameterName;
         var dependenciesParam = (ParameterSyntax)
             generator.ParameterDeclaration(dependenciesParamName, generator.IdentifierName(instructions.DependenciesInterfaceName));
-        
+
         var dependenciesAssignment = (StatementSyntax)
             generator.ExpressionStatement(
                 generator.AssignmentStatement(
@@ -72,8 +72,12 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
             else
             {
                 updatedNode = updatedNode.WithInitializer(
-                    SyntaxFactory.ConstructorInitializer(SyntaxKind.BaseConstructorInitializer, 
-                        SyntaxFactory.ArgumentList(SyntaxFactory.SingletonSeparatedList(SyntaxFactory.Argument(SyntaxFactory.IdentifierName(baseDepsParamName)))))
+                    SyntaxFactory.ConstructorInitializer(
+                        SyntaxKind.BaseConstructorInitializer,
+                        SyntaxFactory.ArgumentList(
+                            SyntaxFactory.SingletonSeparatedList(SyntaxFactory.Argument(SyntaxFactory.IdentifierName(baseDepsParamName)))
+                        )
+                    )
                 );
             }
 

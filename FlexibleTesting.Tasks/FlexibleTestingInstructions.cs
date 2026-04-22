@@ -5,9 +5,9 @@ namespace FlexibleTesting.Tasks;
 
 public class FlexibleTestingInstructions
 {
-    public INamedTypeSymbol TargetType { get; set; }
-    public string OldClassName { get; set; }
-    public string NewClassName { get; set; }
+    public INamedTypeSymbol TargetType { get; set; } = null!;
+    public string OldClassName { get; set; } = string.Empty;
+    public string NewClassName { get; set; } = string.Empty;
 
     public HashSet<IMethodSymbol> MethodsToMakePublic { get; } = new(SymbolSignatureComparer.Default);
 
@@ -20,9 +20,9 @@ public class FlexibleTestingInstructions
     /// </summary>
     public Dictionary<ISymbol, string> DependencyMemberNames { get; } = new(SymbolSignatureComparer.Default);
 
-    public string DependenciesInterfaceName { get; set; }
-    public string DependenciesFieldName { get; set; }
-    public string DependenciesParameterName { get; set; }
+    public string DependenciesInterfaceName { get; set; } = string.Empty;
+    public string DependenciesFieldName { get; set; } = string.Empty;
+    public string DependenciesParameterName { get; set; } = string.Empty;
     public bool MockInheritance { get; set; }
 
     public IEnumerable<ISymbol> AllMockables
