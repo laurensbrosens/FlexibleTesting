@@ -57,13 +57,6 @@ _userService = new UserService();
 _userService = _dependencies.UserService(); // Mockable dependency
 ```
 
-### Call-site Replacement (Not implemented yet)
-Hard-swap a property or method call site with a specific test implementation.
-```csharp
-Overwrites.ReplaceProperty(() => DateTime.Now, () => TestClock.Now);
-Overwrites.Replace(s => s.IsValidEmail(), TestEmail.IsValidEmail);
-```
-
 ### Stacking Instructions (Not implemented yet)
 Reuse common overwrite rules across multiple builders.
 ```csharp
@@ -93,7 +86,7 @@ internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewMod
         Overwrites.ForClass<UserViewModel>();
         Overwrites.Mock(() => DateTime.Now);
         // Overwrites.Mock(() => OnPropertyChanged); MockInheritance already handles this
-        Overwrites.Mock(() => SomePrivateMethod);
+        Overwrites.Mock<IShadow, Action>(x => x.SomePrivateMethod);
         Overwrites.Mock<UserService>();
         Overwrites.MockInheritance();
         Overwrites.MakePublic<Action<object?, EventArgs>>(() => OnLoad);

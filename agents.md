@@ -1,5 +1,7 @@
 # Build & Verify Workflow
 
+Aways first read @file:README.md for the general idea of the codebase.
+
 This project uses a custom code generation task. To develop and verify changes, follow this workflow:
 
 1. **Modify Code**: Apply necessary changes to `FlexibleTesting.Tasks`.
