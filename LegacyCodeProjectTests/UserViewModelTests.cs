@@ -2,6 +2,7 @@ namespace LegacyCodeProjectTests;
 
 using LegacyCodeProject.Core;
 using LegacyCodeProject.Viewmodels;
+using LegacyCodeProjectCore;
 using NSubstitute;
 
 public class UserViewModelTests
@@ -11,14 +12,16 @@ public class UserViewModelTests
     {
         var data = new SomeDataObject();
         var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+        var coreDeps = Substitute.For<IAutoViewModelCoreDependencies>();
         var expectedDate = new DateTime(2026, 4, 15);
         var expectedService = Substitute.For<IAutoUserService>();
 
         baseDeps.Now.Returns(() => expectedDate);
         baseDeps.UserService().Returns(expectedService);
+        coreDeps.Now.Returns(() => expectedDate);
         expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
 
-        var vm = new UserViewModelBase_G(data, baseDeps);
+        var vm = new UserViewModelBase_G(data, baseDeps, coreDeps);
 
         Assert.Multiple(() =>
         {
@@ -36,16 +39,18 @@ public class UserViewModelTests
         var data = new SomeDataObject();
         var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
         var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var coreDeps = Substitute.For<IAutoViewModelCoreDependencies>();
         var expectedDate = new DateTime(2026, 4, 16);
         var expectedGuid = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
         var expectedService = Substitute.For<IAutoUserService>();
 
         baseDeps.Now.Returns(() => expectedDate);
         baseDeps.UserService().Returns(expectedService);
+        coreDeps.Now.Returns(() => expectedDate);
         deps.NewGuid().Returns(expectedGuid);
         expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
 
-        var vm = new UserViewModel_G(data, deps, baseDeps);
+        var vm = new UserViewModel_G(data, deps, baseDeps, coreDeps);
 
         Assert.Multiple(() =>
         {
@@ -62,15 +67,17 @@ public class UserViewModelTests
         var data = new SomeDataObject();
         var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
         var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var coreDeps = Substitute.For<IAutoViewModelCoreDependencies>();
         var expectedGuid = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
         var expectedService = Substitute.For<IAutoUserService>();
 
         baseDeps.Now.Returns(() => new DateTime(2026, 4, 17));
         baseDeps.UserService().Returns(expectedService);
+        coreDeps.Now.Returns(() => new DateTime(2026, 4, 17));
         deps.NewGuid().Returns(expectedGuid);
         expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
 
-        var vm = new UserViewModel_G(data, deps, baseDeps);
+        var vm = new UserViewModel_G(data, deps, baseDeps, coreDeps);
 
         Assert.Multiple(() =>
         {

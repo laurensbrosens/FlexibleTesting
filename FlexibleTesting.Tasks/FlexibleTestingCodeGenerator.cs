@@ -1,4 +1,5 @@
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.Simplification;
@@ -13,16 +14,16 @@ namespace FlexibleTesting.Tasks;
 
 public class FlexibleTestingCodeGenerator
 {
-    private readonly Project _legacyProject;
+    private readonly Solution _solution;
     private readonly string _outputPath;
     private readonly IFlexibleTestingNamePolicy _namePolicy;
     private readonly IDependencyInterfaceGenerator _dependencyInterfaceGenerator;
     private readonly IBaseInheritanceGenerator _baseInheritanceGenerator;
     private readonly HashSet<string> _requiredNamespaces = new(StringComparer.Ordinal);
 
-    public FlexibleTestingCodeGenerator(Project legacyProject, string outputPath)
+    public FlexibleTestingCodeGenerator(Solution solution, string outputPath)
         : this(
-            legacyProject,
+            solution,
             outputPath,
             new FlexibleTestingNamePolicy(),
             new WellKnownDelegateTypeResolver()
@@ -31,13 +32,13 @@ public class FlexibleTestingCodeGenerator
     }
 
     internal FlexibleTestingCodeGenerator(
-        Project legacyProject,
+        Solution solution,
         string outputPath,
         IFlexibleTestingNamePolicy namePolicy,
         IWellKnownDelegateTypeResolver delegateTypeResolver
     )
     {
-        _legacyProject = legacyProject;
+        _solution = solution;
         _outputPath = outputPath;
         _namePolicy = namePolicy;
         _requiredNamespaces.Add(FlexibleTestingGeneratedNames.SystemNamespaceName);
@@ -52,7 +53,7 @@ public class FlexibleTestingCodeGenerator
         if (targetClassSyntax == null)
             return;
 
-        var targetDocument = _legacyProject.GetDocument(targetClassSyntax.SyntaxTree);
+        var targetDocument = _solution.GetDocument(targetClassSyntax.SyntaxTree);
         if (targetDocument == null)
             return;
 
@@ -73,6 +74,12 @@ public class FlexibleTestingCodeGenerator
     {
         _requiredNamespaces.Clear();
         _requiredNamespaces.Add(FlexibleTestingGeneratedNames.SystemNamespaceName);
+        foreach (var ancestorType in instructions.RecursiveBaseTypes)
+        {
+            var ancestorNamespace = ancestorType.ContainingNamespace;
+            if (ancestorNamespace is { IsGlobalNamespace: false })
+                _requiredNamespaces.Add(ancestorNamespace.ToDisplayString());
+        }
 
         var syntaxRoot = await document.GetSyntaxRootAsync() ?? throw new InvalidOperationException("Could not get syntax root");
         var semanticModel = await document.GetSemanticModelAsync() ?? throw new InvalidOperationException("Could not get semantic model");
@@ -87,7 +94,14 @@ public class FlexibleTestingCodeGenerator
             .OfType<ClassDeclarationSyntax>()
             .First(classNode => classNode.Identifier.Text == instructions.NewClassName);
 
-        AddStructuralMembers(syntaxEditor, generatedClassSyntax, instructions, syntaxGenerator, semanticModel.Compilation);
+        AddStructuralMembers(
+            syntaxEditor,
+            generatedClassSyntax,
+            targetClassSyntax,
+            instructions,
+            syntaxGenerator,
+            semanticModel.Compilation
+        );
 
         if (instructions.MockInheritance && targetClassSyntax.BaseList != null && targetClassSyntax.BaseList.Types.Any())
             _baseInheritanceGenerator.TryAddBaseInheritanceMembers(syntaxEditor, generatedClassSyntax, instructions, semanticModel, syntaxGenerator);
@@ -102,19 +116,54 @@ public class FlexibleTestingCodeGenerator
     private void AddStructuralMembers(
         SyntaxEditor syntaxEditor,
         ClassDeclarationSyntax generatedClassSyntax,
+        ClassDeclarationSyntax sourceClassSyntax,
         FlexibleTestingInstructions instructions,
         SyntaxGenerator syntaxGenerator,
         Compilation compilation
     )
     {
-        syntaxEditor.AddMember(
-            generatedClassSyntax,
-            syntaxGenerator.FieldDeclaration(
+        var hasPrimaryConstructor = sourceClassSyntax.ParameterList != null && !sourceClassSyntax.Members.OfType<ConstructorDeclarationSyntax>().Any();
+        MemberDeclarationSyntax dependenciesField;
+
+        if (hasPrimaryConstructor)
+        {
+            dependenciesField = (FieldDeclarationSyntax)Microsoft.CodeAnalysis.CSharp.SyntaxFactory.FieldDeclaration(
+                Microsoft.CodeAnalysis.CSharp.SyntaxFactory.VariableDeclaration(
+                    (TypeSyntax)syntaxGenerator.IdentifierName(instructions.DependenciesInterfaceName),
+                    Microsoft.CodeAnalysis.CSharp.SyntaxFactory.SeparatedList(
+                        new[]
+                        {
+                            Microsoft.CodeAnalysis.CSharp.SyntaxFactory.VariableDeclarator(
+                                Microsoft.CodeAnalysis.CSharp.SyntaxFactory.Identifier(_namePolicy.DependenciesFieldName),
+                                default,
+                                Microsoft.CodeAnalysis.CSharp.SyntaxFactory.EqualsValueClause(
+                                    Microsoft.CodeAnalysis.CSharp.SyntaxFactory.IdentifierName(instructions.DependenciesParameterName)
+                                )
+                            ),
+                        }
+                    )
+                )
+            )
+            .WithModifiers(
+                Microsoft.CodeAnalysis.CSharp.SyntaxFactory.TokenList(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxFactory.Token(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PrivateKeyword),
+                    Microsoft.CodeAnalysis.CSharp.SyntaxFactory.Token(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ReadOnlyKeyword)
+                )
+            );
+        }
+        else
+        {
+            dependenciesField = (MemberDeclarationSyntax)syntaxGenerator.FieldDeclaration(
                 _namePolicy.DependenciesFieldName,
                 syntaxGenerator.IdentifierName(instructions.DependenciesInterfaceName),
                 Accessibility.Private,
                 DeclarationModifiers.ReadOnly
-            )
+            );
+        }
+
+        syntaxEditor.AddMember(
+            generatedClassSyntax,
+            dependenciesField
         );
 
         if (instructions.MockInheritance)

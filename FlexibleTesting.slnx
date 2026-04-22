@@ -5,5 +5,6 @@
   <Project Path="FlexibleTesting.Tasks/FlexibleTesting.Tasks.csproj" />
   <Project Path="FlexibleTestingDomain/FlexibleTestingDomain.csproj" Id="37e7aea9-9b55-4ae0-b010-00976c1c4225" />
   <Project Path="LegacyCodeProject/LegacyCodeProject.csproj" />
+  <Project Path="LegacyCodeProjectCore/LegacyCodeProjectCore.csproj" Id="84fde823-43c9-45d9-ab12-dd4b687ec766" />
   <Project Path="LegacyCodeProjectTests/LegacyCodeProjectTests.csproj" Id="066c1f54-8020-43f7-875c-ad99ce2f668b" />
 </Solution>

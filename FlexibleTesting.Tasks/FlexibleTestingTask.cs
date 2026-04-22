@@ -36,14 +36,13 @@ public class FlexibleTestingTask : Microsoft.Build.Utilities.Task
             using var workspace = MSBuildWorkspace.Create(properties);
             workspace.SkipUnrecognizedProjects = true;
 
-            var legacyProject = workspace.OpenProjectAsync(LegacyProjectPath).Result;
-            var legacyComp = legacyProject.GetCompilationAsync().Result ?? throw new InvalidOperationException("Could not get legacy compilation");
-            
+            _ = workspace.OpenProjectAsync(LegacyProjectPath).Result;
             var testProject = workspace.OpenProjectAsync(BuildEngine.ProjectFileOfTaskNode).Result;
             var testComp = testProject.GetCompilationAsync().Result ?? throw new InvalidOperationException("Could not get test compilation");
+            var solution = workspace.CurrentSolution;
 
-            var creator = new FlexibleTestingInstructionsCreator(legacyComp, testComp);
-            var generator = new FlexibleTestingCodeGenerator(legacyProject, OutputPath);
+            var creator = new FlexibleTestingInstructionsCreator(solution, testComp);
+            var generator = new FlexibleTestingCodeGenerator(solution, OutputPath);
 
             foreach (var instructions in creator.CreateAll())
             {

@@ -9,14 +9,14 @@ namespace FlexibleTesting.Tasks;
 
 public class FlexibleTestingInstructionsCreator
 {
-    private readonly Compilation _legacyCompilation;
+    private readonly Solution _solution;
     private readonly Compilation _testCompilation;
     private readonly INamedTypeSymbol? _targetAttributeSymbol;
     private readonly INamedTypeSymbol? _overwritesSymbol;
 
-    public FlexibleTestingInstructionsCreator(Compilation legacyCompilation, Compilation testCompilation)
+    public FlexibleTestingInstructionsCreator(Solution solution, Compilation testCompilation)
     {
-        _legacyCompilation = legacyCompilation;
+        _solution = solution;
         _testCompilation = testCompilation;
         _targetAttributeSymbol = _testCompilation.GetTypeByMetadataName(typeof(GeneratorInstructionsAttribute).FullName!);
         _overwritesSymbol = _testCompilation.GetTypeByMetadataName(typeof(Overwrites).FullName!);
@@ -109,11 +109,36 @@ public class FlexibleTestingInstructionsCreator
         if (targetTypeFromTest == null || targetTypeFromTest.TypeKind == TypeKind.Error)
             return null;
 
-        var targetMetadataName = GetTypeMetadataName(targetTypeFromTest.OriginalDefinition);
-        var targetTypeInLegacy = _legacyCompilation.GetTypeByMetadataName(targetMetadataName);
-
-        if (targetTypeInLegacy?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not ClassDeclarationSyntax targetClassNode)
+        if (targetTypeFromTest.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not ClassDeclarationSyntax targetClassNode)
             return null;
+
+        var targetDocument = _solution.GetDocument(targetClassNode.SyntaxTree);
+        if (targetDocument == null)
+            return null;
+
+        var targetCompilation = targetDocument.Project.GetCompilationAsync().Result;
+        if (targetCompilation == null)
+            return null;
+
+        var targetMetadataName = GetTypeMetadataName(targetTypeFromTest.OriginalDefinition);
+        var targetTypeInLegacy = targetCompilation.GetTypeByMetadataName(targetMetadataName);
+        if (targetTypeInLegacy == null)
+            return null;
+
+        if (instructions.MockClasses.Count > 0)
+        {
+            var resolvedMockClasses = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+            foreach (var mockType in instructions.MockClasses)
+            {
+                var resolvedMockType = targetCompilation.GetTypeByMetadataName(GetTypeMetadataName(mockType));
+                if (resolvedMockType != null)
+                    resolvedMockClasses.Add(resolvedMockType);
+            }
+
+            instructions.MockClasses.Clear();
+            foreach (var resolvedMockType in resolvedMockClasses)
+                instructions.MockClasses.Add(resolvedMockType);
+        }
 
         var oldName = targetClassNode.Identifier.Text;
         instructions.TargetType = targetTypeInLegacy;
@@ -122,7 +147,7 @@ public class FlexibleTestingInstructionsCreator
         instructions.DependenciesInterfaceName = FlexibleTestingGeneratedNames.GetDependenciesInterfaceName(oldName);
 
         MapMethodsToLegacy(instructions);
-        MapMockClassConstructors(instructions, targetClassNode);
+        MapMockClassConstructors(instructions, targetClassNode, targetDocument);
 
         return instructions;
     }
@@ -145,7 +170,10 @@ public class FlexibleTestingInstructionsCreator
         }
 
         foreach (var instructions in instructionsList.Where(i => i.RecursiveMockInheritance))
+        {
             ValidateRecursiveChain(instructions, byTargetMetadataName, new HashSet<string>(StringComparer.Ordinal));
+            PopulateRecursiveBaseTypes(instructions, byTargetMetadataName);
+        }
     }
 
     private void ValidateRecursiveChain(
@@ -182,6 +210,25 @@ public class FlexibleTestingInstructionsCreator
 
         ValidateRecursiveChain(baseInstructions, byTargetMetadataName, traversalStack);
         traversalStack.Remove(baseMetadataName);
+    }
+
+    private void PopulateRecursiveBaseTypes(
+        FlexibleTestingInstructions instructions,
+        IReadOnlyDictionary<string, FlexibleTestingInstructions> byTargetMetadataName
+    )
+    {
+        instructions.RecursiveBaseTypes.Clear();
+
+        var currentBaseType = instructions.TargetType.BaseType;
+        while (currentBaseType != null && currentBaseType.SpecialType != SpecialType.System_Object)
+        {
+            var currentMetadataName = GetTypeMetadataName(currentBaseType.OriginalDefinition);
+            if (!byTargetMetadataName.TryGetValue(currentMetadataName, out var currentBaseInstructions))
+                break;
+
+            instructions.RecursiveBaseTypes.Add(currentBaseInstructions.TargetType);
+            currentBaseType = currentBaseType.BaseType;
+        }
     }
 
     private void AddToMakePublic(SemanticModel model, HashSet<IMethodSymbol> methodsToMakePublic, InvocationExpressionSyntax invocation)
@@ -258,7 +305,7 @@ public class FlexibleTestingInstructionsCreator
         if (methodSymbol.TypeArguments.FirstOrDefault() is not INamedTypeSymbol mockType || mockType.TypeKind != TypeKind.Class)
             return;
 
-        var legacyMockType = _legacyCompilation.GetTypeByMetadataName(GetTypeMetadataName(mockType));
+        var legacyMockType = mockType;
         if (legacyMockType == null)
             return;
 
@@ -268,14 +315,17 @@ public class FlexibleTestingInstructionsCreator
 
     private void MapMockClassConstructors(
         FlexibleTestingInstructions instructions,
-        ClassDeclarationSyntax targetClassNode
+        ClassDeclarationSyntax targetClassNode,
+        Document targetDocument
     )
     {
         var mockedTypes = instructions.MockClasses;
         if (!mockedTypes.Any())
             return;
 
-        var legacyModel = _legacyCompilation.GetSemanticModel(targetClassNode.SyntaxTree);
+        var legacyModel = targetDocument.GetSemanticModelAsync().Result;
+        if (legacyModel == null)
+            return;
 
         foreach (var creation in targetClassNode.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
         {

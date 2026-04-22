@@ -14,7 +14,7 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     {
         var rewrittenNode = (ClassDeclarationSyntax)base.VisitClassDeclaration(node)!;
         var updatedNode = rewrittenNode.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
-        var baseType = semanticModel.GetDeclaredSymbol(node)?.ContainingType?.BaseType;
+        var baseType = semanticModel.GetDeclaredSymbol(node)?.BaseType;
 
         if ((instructions.MockInheritance || instructions.RecursiveMockInheritance) && updatedNode.BaseList != null)
         {
@@ -27,6 +27,13 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
                 )
             );
             updatedNode = updatedNode.WithBaseList(newBaseList);
+        }
+
+        if (node.ParameterList != null)
+        {
+            var primaryDependenciesParam = (ParameterSyntax)
+                generator.ParameterDeclaration(instructions.DependenciesParameterName, generator.IdentifierName(instructions.DependenciesInterfaceName));
+            updatedNode = updatedNode.WithParameterList(node.ParameterList.AddParameters(primaryDependenciesParam));
         }
 
         return updatedNode;
@@ -57,18 +64,41 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
 
         if ((instructions.MockInheritance || instructions.RecursiveMockInheritance) && hasRealBaseClass)
         {
-            var baseDepsParamName = FlexibleTestingGeneratedNames.BaseDependenciesParameterName;
-            var baseDepsInterfaceName =
-                instructions.RecursiveMockInheritance && baseTypeName != null
-                    ? FlexibleTestingGeneratedNames.GetDependenciesInterfaceName(baseTypeName)
-                    : FlexibleTestingGeneratedNames.GetBaseDependenciesInterfaceName(instructions.OldClassName);
-            var baseDepsParam = (ParameterSyntax)
-                generator.ParameterDeclaration(baseDepsParamName, generator.IdentifierName(baseDepsInterfaceName));
+            var baseDependencyParameters = new List<ParameterSyntax>();
+            var baseDependencyArgumentExpressions = new List<ExpressionSyntax>();
+
+            if (instructions.RecursiveMockInheritance && instructions.RecursiveBaseTypes.Count > 0)
+            {
+                for (var index = 0; index < instructions.RecursiveBaseTypes.Count; index++)
+                {
+                    var ancestorType = instructions.RecursiveBaseTypes[index];
+                    var baseDepsParamName = GetRecursiveBaseDependenciesParameterName(index);
+                    var baseDepsInterfaceName = FlexibleTestingGeneratedNames.GetDependenciesInterfaceName(ancestorType.Name);
+                    baseDependencyParameters.Add(
+                        (ParameterSyntax)generator.ParameterDeclaration(baseDepsParamName, generator.IdentifierName(baseDepsInterfaceName))
+                    );
+                    baseDependencyArgumentExpressions.Add(SyntaxFactory.IdentifierName(baseDepsParamName));
+                }
+            }
+            else
+            {
+                var baseDepsParamName = FlexibleTestingGeneratedNames.BaseDependenciesParameterName;
+                var baseDepsInterfaceName =
+                    instructions.RecursiveMockInheritance && baseTypeName != null
+                        ? FlexibleTestingGeneratedNames.GetDependenciesInterfaceName(baseTypeName)
+                        : FlexibleTestingGeneratedNames.GetBaseDependenciesInterfaceName(instructions.OldClassName);
+                baseDependencyParameters.Add(
+                    (ParameterSyntax)generator.ParameterDeclaration(baseDepsParamName, generator.IdentifierName(baseDepsInterfaceName))
+                );
+                baseDependencyArgumentExpressions.Add(SyntaxFactory.IdentifierName(baseDepsParamName));
+            }
+
+            var firstBaseDependencyParameterName = baseDependencyParameters[0].Identifier.ValueText;
 
             if (updatedNode.Initializer?.IsKind(SyntaxKind.BaseConstructorInitializer) == true)
             {
-                var baseArgs = updatedNode.Initializer.ArgumentList.Arguments.Add(
-                    SyntaxFactory.Argument(SyntaxFactory.IdentifierName(baseDepsParamName))
+                var baseArgs = updatedNode.Initializer.ArgumentList.Arguments.AddRange(
+                    baseDependencyArgumentExpressions.Select(SyntaxFactory.Argument)
                 );
                 updatedNode = updatedNode.WithInitializer(
                     updatedNode.Initializer.WithArgumentList(updatedNode.Initializer.ArgumentList.WithArguments(baseArgs))
@@ -80,20 +110,20 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
                     SyntaxFactory.ConstructorInitializer(
                         SyntaxKind.BaseConstructorInitializer,
                         SyntaxFactory.ArgumentList(
-                            SyntaxFactory.SingletonSeparatedList(SyntaxFactory.Argument(SyntaxFactory.IdentifierName(baseDepsParamName)))
+                            SyntaxFactory.SeparatedList(baseDependencyArgumentExpressions.Select(SyntaxFactory.Argument))
                         )
                     )
                 );
             }
 
-            updatedNode = updatedNode.AddParameterListParameters(baseDepsParam);
+            updatedNode = updatedNode.AddParameterListParameters(baseDependencyParameters.ToArray());
             if (instructions.MockInheritance)
             {
                 var baseAssignment = (StatementSyntax)
                 generator.ExpressionStatement(
                     generator.AssignmentStatement(
                         generator.IdentifierName(FlexibleTestingGeneratedNames.BaseDependenciesFieldName),
-                        generator.IdentifierName(baseDepsParamName)
+                        generator.IdentifierName(firstBaseDependencyParameterName)
                     )
                 );
                 statements.Add(baseAssignment);
@@ -103,6 +133,14 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         return updatedNode.Body != null
             ? updatedNode.WithBody(updatedNode.Body.WithStatements(SyntaxFactory.List(statements.Concat(updatedNode.Body.Statements))))
             : updatedNode.WithBody(SyntaxFactory.Block(statements)).WithExpressionBody(null).WithSemicolonToken(default);
+    }
+
+    private static string GetRecursiveBaseDependenciesParameterName(int index)
+    {
+        if (index == 0)
+            return FlexibleTestingGeneratedNames.BaseDependenciesParameterName;
+
+        return $"base{string.Concat(Enumerable.Repeat("Base", index))}Dependencies";
     }
 
     public override SyntaxNode? VisitMethodDeclaration(MethodDeclarationSyntax node)
