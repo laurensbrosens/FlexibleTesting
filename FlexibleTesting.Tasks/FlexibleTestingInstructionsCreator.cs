@@ -65,8 +65,8 @@ public class FlexibleTestingInstructionsCreator
 
         var instructions = new FlexibleTestingInstructions
         {
-            DependenciesFieldName = "_dependencies",
-            DependenciesParameterName = "dependencies",
+            DependenciesFieldName = FlexibleTestingGeneratedNames.DependenciesFieldName,
+            DependenciesParameterName = FlexibleTestingGeneratedNames.DependenciesParameterName,
         };
 
         var allInstructionMethods = configureMethod.Body.DescendantNodes().OfType<InvocationExpressionSyntax>();
@@ -118,8 +118,8 @@ public class FlexibleTestingInstructionsCreator
         var oldName = targetClassNode.Identifier.Text;
         instructions.TargetType = targetTypeInLegacy;
         instructions.OldClassName = oldName;
-        instructions.NewClassName = $"{oldName}_G";
-        instructions.DependenciesInterfaceName = $"IAuto{oldName}Dependencies";
+        instructions.NewClassName = FlexibleTestingGeneratedNames.GetGeneratedClassName(oldName);
+        instructions.DependenciesInterfaceName = FlexibleTestingGeneratedNames.GetDependenciesInterfaceName(oldName);
 
         MapMethodsToLegacy(instructions);
         MapMockClassConstructors(instructions, targetClassNode);

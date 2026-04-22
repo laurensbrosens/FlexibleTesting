@@ -10,8 +10,6 @@ namespace FlexibleTesting.Tasks;
 public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestingInstructions instructions, SyntaxGenerator generator)
     : CSharpSyntaxRewriter
 {
-    public bool NeedsCallerMemberName { get; private set; }
-
     public override SyntaxNode? VisitClassDeclaration(ClassDeclarationSyntax node)
     {
         var rewrittenNode = (ClassDeclarationSyntax)base.VisitClassDeclaration(node)!;
@@ -21,8 +19,8 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         if ((instructions.MockInheritance || instructions.RecursiveMockInheritance) && updatedNode.BaseList != null)
         {
             var baseClassName = instructions.RecursiveMockInheritance && baseType != null
-                ? $"{baseType.Name}_G"
-                : $"{instructions.OldClassName}Base_G";
+                ? FlexibleTestingGeneratedNames.GetGeneratedClassName(baseType.Name)
+                : FlexibleTestingGeneratedNames.GetBaseGeneratedClassName(instructions.OldClassName);
             var newBaseList = updatedNode.BaseList.WithTypes(
                 SyntaxFactory.SeparatedList(
                     new BaseTypeSyntax[] { SyntaxFactory.SimpleBaseType(SyntaxFactory.IdentifierName(baseClassName)) }
@@ -59,11 +57,11 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
 
         if ((instructions.MockInheritance || instructions.RecursiveMockInheritance) && hasRealBaseClass)
         {
-            var baseDepsParamName = "baseDependencies";
+            var baseDepsParamName = FlexibleTestingGeneratedNames.BaseDependenciesParameterName;
             var baseDepsInterfaceName =
                 instructions.RecursiveMockInheritance && baseTypeName != null
-                    ? $"IAuto{baseTypeName}Dependencies"
-                    : $"IAuto{instructions.OldClassName}BaseDependencies";
+                    ? FlexibleTestingGeneratedNames.GetDependenciesInterfaceName(baseTypeName)
+                    : FlexibleTestingGeneratedNames.GetBaseDependenciesInterfaceName(instructions.OldClassName);
             var baseDepsParam = (ParameterSyntax)
                 generator.ParameterDeclaration(baseDepsParamName, generator.IdentifierName(baseDepsInterfaceName));
 
@@ -92,12 +90,12 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
             if (instructions.MockInheritance)
             {
                 var baseAssignment = (StatementSyntax)
-                    generator.ExpressionStatement(
-                        generator.AssignmentStatement(
-                            generator.IdentifierName("_baseDependencies"),
-                            generator.IdentifierName(baseDepsParamName)
-                        )
-                    );
+                generator.ExpressionStatement(
+                    generator.AssignmentStatement(
+                        generator.IdentifierName(FlexibleTestingGeneratedNames.BaseDependenciesFieldName),
+                        generator.IdentifierName(baseDepsParamName)
+                    )
+                );
                 statements.Add(baseAssignment);
             }
         }
@@ -168,7 +166,7 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     {
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
         if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
-            return SyntaxFactory.IdentifierName(GetMockClassInterfaceName(namedType)).WithTriviaFrom(node);
+            return SyntaxFactory.IdentifierName(FlexibleTestingGeneratedNames.GetMockClassInterfaceName(namedType.Name)).WithTriviaFrom(node);
 
         return base.VisitIdentifierName(node);
     }
@@ -177,7 +175,7 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     {
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
         if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
-            return SyntaxFactory.IdentifierName(GetMockClassInterfaceName(namedType)).WithTriviaFrom(node);
+            return SyntaxFactory.IdentifierName(FlexibleTestingGeneratedNames.GetMockClassInterfaceName(namedType.Name)).WithTriviaFrom(node);
 
         return base.VisitQualifiedName(node);
     }
@@ -186,12 +184,9 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     {
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
         if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
-            return SyntaxFactory.IdentifierName(GetMockClassInterfaceName(namedType)).WithTriviaFrom(node);
+            return SyntaxFactory.IdentifierName(FlexibleTestingGeneratedNames.GetMockClassInterfaceName(namedType.Name)).WithTriviaFrom(node);
 
         return base.VisitAliasQualifiedName(node);
     }
 
-    private void CheckForCallerMemberName(ISymbol symbol) { }
-
-    private string GetMockClassInterfaceName(INamedTypeSymbol mockedType) => $"IAuto{mockedType.Name}";
 }
