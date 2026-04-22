@@ -5,7 +5,7 @@ Steps implementation of sourcegenerator:
 4. DONE (with Mock) Overwrites.Replace
 5. Overwrites.InheritFrom (probably easier than MockInheritance?)
 6. Overwrites.MockInheritance (spicy)
-7. Overwrites.Mock<> (spicy)
+7. DONE Overwrites.Mock<> (spicy)
 8. Implement Overwrites.Include (to allow a common base builder), last because not required
 9. Split the generated code into separate classes (does this work well with the usings?)
 10. AutoMockInheritance (a builder for every parent is required, if not possible use the current stub approach)

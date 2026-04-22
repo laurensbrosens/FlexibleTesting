@@ -39,7 +39,7 @@ Overwrites.MakePublic<IShadow, Action>(x => x.InternalMethod);
 // Rewrites the method to public in the generated UserViewModel_G
 ```
 
-### Bypassing Heavy Inheritance (Not implemented yet)
+### Bypassing Heavy Inheritance
 Replace a base class that has side effects in its constructor with an auto-generated copy.
 ```csharp
 Overwrites.MockInheritance(); 
@@ -61,6 +61,12 @@ _userService = _dependencies.UserService(); // Mockable dependency
 Reuse common overwrite rules across multiple builders.
 ```csharp
 Overwrites.Include<BaseBuilder>();
+```
+
+### Recursive Instructions (Not implemented yet)
+Create complex inheritance hierarchies using a builder file for each class in the hierarchy. Usefull for testing deeply connected inheritance trees without refactoring.
+```csharp
+Overwrites.RecursiveMockInheritance();
 ```
 
 ## Testing the Generated Class
