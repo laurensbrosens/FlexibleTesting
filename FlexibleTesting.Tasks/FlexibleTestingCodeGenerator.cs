@@ -53,7 +53,7 @@ public class FlexibleTestingCodeGenerator
         if (targetClassSyntax == null)
             return;
 
-        var targetDocument = _solution.GetDocument(targetClassSyntax.SyntaxTree);
+        var targetDocument = instructions.TargetDocument ?? _solution.GetDocument(targetClassSyntax.SyntaxTree);
         if (targetDocument == null)
             return;
 

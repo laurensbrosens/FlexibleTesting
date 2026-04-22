@@ -120,12 +120,14 @@ public class FlexibleTestingInstructionsCreator
         {
             targetClassNode = syntaxRef.GetSyntax() as ClassDeclarationSyntax;
             targetDocument = _solution.GetDocument(targetClassNode!.SyntaxTree);
+            instructions.TargetDocument = targetDocument;
         }
         else
         {
             var decompilationResult = TryDecompile(targetTypeFromTest);
             targetClassNode = decompilationResult.node;
             targetDocument = decompilationResult.doc;
+            instructions.TargetDocument = targetDocument;
         }
 
         if (targetClassNode == null || targetDocument == null)
@@ -169,23 +171,16 @@ public class FlexibleTestingInstructionsCreator
 
     private (ClassDeclarationSyntax? node, Document? doc) TryDecompile(INamedTypeSymbol symbol)
     {
-        var assemblyReference = _testCompilation.GetMetadataReference(symbol.ContainingAssembly) as PortableExecutableReference;
-        if (assemblyReference == null || string.IsNullOrEmpty(assemblyReference.FilePath))
+        string? rawPath = GetRuntimeDllPath(symbol);
+        if (string.IsNullOrEmpty(rawPath))
             return (null, null);
 
-        string dllPath = assemblyReference.FilePath;
-        if (dllPath.Contains($"{Path.DirectorySeparatorChar}ref{Path.DirectorySeparatorChar}"))
-            dllPath = dllPath.Replace(
-                $"{Path.DirectorySeparatorChar}ref{Path.DirectorySeparatorChar}",
-                $"{Path.DirectorySeparatorChar}lib{Path.DirectorySeparatorChar}"
-            );
-        if (!File.Exists(dllPath))
+        string fixedPath = Path.GetFullPath(rawPath);
+        if (!File.Exists(fixedPath))
             return (null, null);
 
-        var decompiler = new CSharpDecompiler(dllPath, new DecompilerSettings());
-
-        string reflectionName = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-        var fullTypeName = new ICSharpCode.Decompiler.TypeSystem.FullTypeName(reflectionName);
+        var decompiler = new CSharpDecompiler(fixedPath, new DecompilerSettings());
+        var fullTypeName = GetFullTypeName(symbol);
 
         var typeDef = decompiler.TypeSystem.MainModule.GetTypeDefinition(fullTypeName.TopLevelTypeName);
         if (typeDef == null)
@@ -202,9 +197,40 @@ public class FlexibleTestingInstructionsCreator
 
         var virtualDoc = solutionWithDoc.GetDocument(docId);
         var root = virtualDoc?.GetSyntaxRootAsync().GetAwaiter().GetResult();
-        var node = root?.DescendantNodesAndSelf().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+
+        var node = root?.DescendantNodesAndSelf()
+            .OfType<ClassDeclarationSyntax>()
+            .FirstOrDefault(n => n.Identifier.ValueText == symbol.Name);
 
         return (node, virtualDoc);
+    }
+
+    private string? GetRuntimeDllPath(INamedTypeSymbol symbol)
+    {
+        var assemblyReference = _testCompilation.GetMetadataReference(symbol.ContainingAssembly) as PortableExecutableReference;
+        if (string.IsNullOrEmpty(assemblyReference?.FilePath))
+            return null;
+
+        var path = assemblyReference?.FilePath;
+        string refDir = $"{Path.DirectorySeparatorChar}ref{Path.DirectorySeparatorChar}";
+        string libDir = $"{Path.DirectorySeparatorChar}lib{Path.DirectorySeparatorChar}";
+
+        if (path?.Contains(refDir, StringComparison.OrdinalIgnoreCase) == false)
+        {
+            path = path?.Replace(refDir, libDir)!;
+        }
+
+        return path;
+    }
+
+    private ICSharpCode.Decompiler.TypeSystem.FullTypeName GetFullTypeName(INamedTypeSymbol symbol)
+    {
+        var format = new SymbolDisplayFormat(
+            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+            genericsOptions: SymbolDisplayGenericsOptions.None
+        );
+
+        return new ICSharpCode.Decompiler.TypeSystem.FullTypeName(symbol.ToDisplayString(format));
     }
 
     private void ValidateRecursiveInheritance(IReadOnlyList<FlexibleTestingInstructions> instructionsList)

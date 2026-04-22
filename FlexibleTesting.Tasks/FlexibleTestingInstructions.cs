@@ -6,6 +6,7 @@ namespace FlexibleTesting.Tasks;
 public class FlexibleTestingInstructions
 {
     public INamedTypeSymbol TargetType { get; set; } = null!;
+    public Document? TargetDocument { get; set; } = null!;
     public string OldClassName { get; set; } = string.Empty;
     public string NewClassName { get; set; } = string.Empty;
 
