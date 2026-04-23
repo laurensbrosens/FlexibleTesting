@@ -385,16 +385,30 @@ public class FlexibleTestingInstructionsCreator
         if (symbol is IMethodSymbol m)
             instructions.MockMethods.Add(m);
         else if (symbol is IPropertySymbol p)
+        {
             instructions.MockProperties.Add(p);
+            // Fix naming collisions for static properties (e.g. DateTime.Now)
+            if (p.IsStatic)
+            {
+                instructions.DependencyMemberNames[p] = $"{p.ContainingType.Name}_{p.Name}";
+            }
+            else
+            {
+                instructions.DependencyMemberNames[p] = p.Name;
+            }
+        }
         else if (symbol is IFieldSymbol f)
+        {
             instructions.MockFields.Add(f);
+            instructions.DependencyMemberNames[f] = f.Name;
+        }
         else if (symbol is INamedTypeSymbol namedType && namedType.TypeKind == TypeKind.Class)
         {
             instructions.MockClasses.Add(namedType);
             instructions.DependencyMemberNames[namedType] = namedType.Name;
         }
 
-        if (symbol != null)
+        if (symbol != null && !instructions.DependencyMemberNames.ContainsKey(symbol))
             instructions.DependencyMemberNames[symbol] = symbol.Name;
     }
 

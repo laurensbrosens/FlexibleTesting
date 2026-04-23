@@ -10,10 +10,8 @@ Steps implementation of sourcegenerator:
 9. Split the generated code into separate classes (does this work well with the usings?)
 10. AutoMockInheritance (a builder for every parent is required, if not possible use the current stub approach)
 
-ToDO:
-•	Partial support!
-•	Generics support!
-•	Replace i.p.v. mock () so unittests dont have to arrange everything
+TODO:
+•	Add Replace instead of only Mock() so unittests dont have to arrange everything
 •	Bugfix for DateTime.Now and prop Now they now have duplicate names IDependencies!
 
 

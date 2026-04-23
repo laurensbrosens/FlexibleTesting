@@ -1,5 +1,3 @@
-using LegacyCodeProject.Core;
-
 namespace LegacyCodeProject.Viewmodels;
 
 public partial class UserViewModel<T>
@@ -9,6 +7,6 @@ public partial class UserViewModel<T>
     public void ExtendedMethod()
     {
         Token = Token + "-extended";
-        CreatedAt = DateTime.Now;
+        Now = DateTime.Now;
     }
 }
