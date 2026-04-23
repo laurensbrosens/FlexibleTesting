@@ -14,6 +14,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="FluentAssertions" Version="8.9.0" />
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Physical" Version="10.0.7" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
     <PackageReference Include="NSubstitute" Version="5.3.0" />
     <PackageReference Include="NUnit" Version="4.5.1" />
@@ -29,12 +30,10 @@
 	</ItemGroup>
 
 	<!-- Visual Studio / Full MSBuild -->
-	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net472\FlexibleTesting.Tasks.dll" 
-			   TaskFactory="TaskHostFactory" Condition="'$(MSBuildRuntimeType)' == 'Full'" />
+	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net472\FlexibleTesting.Tasks.dll" TaskFactory="TaskHostFactory" Condition="'$(MSBuildRuntimeType)' == 'Full'" />
 
 	<!-- dotnet build / Core MSBuild -->
-	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll" 
-			   TaskFactory="TaskHostFactory" Condition="'$(MSBuildRuntimeType)' != 'Full'" />
+	<UsingTask TaskName="FlexibleTesting.Tasks.FlexibleTestingTask" AssemblyFile="..\FlexibleTesting.Tasks\bin\Debug\net10.0\FlexibleTesting.Tasks.dll" TaskFactory="TaskHostFactory" Condition="'$(MSBuildRuntimeType)' != 'Full'" />
 
 	<Target Name="GenerateFlexibleTesting" BeforeTargets="CoreCompile" AfterTargets="ResolveReferences;ResolveProjectReferences" Condition="'$(DesignTimeBuild)' != 'true' AND '$(FlexibleTestingTaskRunning)' != 'true'">
 		<FlexibleTestingTask LegacyProjectPath="..\LegacyCodeProject\LegacyCodeProject.csproj" OutputPath="$(MSBuildProjectDirectory)\Generated" />

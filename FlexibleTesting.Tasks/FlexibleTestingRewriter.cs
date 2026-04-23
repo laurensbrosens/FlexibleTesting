@@ -14,6 +14,20 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     {
         var rewrittenNode = (ClassDeclarationSyntax)base.VisitClassDeclaration(node)!;
         var updatedNode = rewrittenNode.WithIdentifier(SyntaxFactory.Identifier(instructions.NewClassName));
+
+        // Preserve partial modifier: ensure it's present if the source class is partial
+        var hasPartial = updatedNode.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword));
+        if (instructions.IsPartial && !hasPartial)
+        {
+            updatedNode = updatedNode.AddModifiers(SyntaxFactory.Token(SyntaxKind.PartialKeyword));
+        }
+        else if (!instructions.IsPartial && hasPartial)
+        {
+            updatedNode = updatedNode.WithModifiers(
+                SyntaxFactory.TokenList(updatedNode.Modifiers.Where(m => !m.IsKind(SyntaxKind.PartialKeyword)))
+            );
+        }
+
         var baseType = semanticModel.GetDeclaredSymbol(node)?.BaseType;
 
         if ((instructions.MockInheritance || instructions.RecursiveMockInheritance) && updatedNode.BaseList != null)

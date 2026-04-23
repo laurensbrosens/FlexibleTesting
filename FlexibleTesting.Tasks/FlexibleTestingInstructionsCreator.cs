@@ -2,6 +2,7 @@ using FlexibleTestingDomain;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System;
 using System.Collections.Generic;
@@ -162,6 +163,7 @@ public class FlexibleTestingInstructionsCreator
         instructions.OldClassName = oldName;
         instructions.NewClassName = FlexibleTestingGeneratedNames.GetGeneratedClassName(oldName);
         instructions.DependenciesInterfaceName = FlexibleTestingGeneratedNames.GetDependenciesInterfaceName(oldName);
+        instructions.IsPartial = targetClassNode.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword));
 
         MapMethodsToLegacy(instructions);
         MapMockClassConstructors(instructions, targetClassNode, targetDocument);

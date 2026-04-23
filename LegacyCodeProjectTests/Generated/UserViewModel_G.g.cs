@@ -5,7 +5,7 @@ using LegacyCodeProject.Viewmodels;
 using LegacyCodeProjectCore;
 
 namespace LegacyCodeProject.Viewmodels;
-public class UserViewModel_G : UserViewModelBase_G
+public partial class UserViewModel_G : UserViewModelBase_G
 {
     public UserViewModel_G(SomeDataObject someDataObject, IAutoUserViewModelDependencies dependencies, IAutoUserViewModelBaseDependencies baseDependencies, IAutoViewModelCoreDependencies baseBaseDependencies) : base(someDataObject, baseDependencies, baseBaseDependencies)
     {

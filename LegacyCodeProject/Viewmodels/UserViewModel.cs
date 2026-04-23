@@ -2,7 +2,7 @@ using LegacyCodeProject.Core;
 
 namespace LegacyCodeProject.Viewmodels;
 
-public class UserViewModel : UserViewModelBase
+public partial class UserViewModel : UserViewModelBase
 {
     public UserViewModel(SomeDataObject someDataObject)
         : base(someDataObject)
