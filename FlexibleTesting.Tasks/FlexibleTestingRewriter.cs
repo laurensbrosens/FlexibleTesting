@@ -28,6 +28,13 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
             );
         }
 
+        if (instructions.RemoveSealed)
+        {
+            updatedNode = updatedNode.WithModifiers(
+                SyntaxFactory.TokenList(updatedNode.Modifiers.Where(m => !m.IsKind(SyntaxKind.SealedKeyword)))
+            );
+        }
+
         var baseType = semanticModel.GetDeclaredSymbol(node)?.BaseType;
 
         if ((instructions.MockInheritance || instructions.RecursiveMockInheritance) && updatedNode.BaseList != null)

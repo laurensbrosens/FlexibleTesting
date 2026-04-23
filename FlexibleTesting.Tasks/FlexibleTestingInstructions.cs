@@ -35,6 +35,7 @@ public class FlexibleTestingInstructions
     public string DependenciesParameterName { get; set; } = string.Empty;
     public bool MockInheritance { get; set; }
     public bool RecursiveMockInheritance { get; set; }
+    public bool RemoveSealed { get; set; }
     public bool IsPartial { get; set; }
     public List<INamedTypeSymbol> RecursiveBaseTypes { get; } = new();
 

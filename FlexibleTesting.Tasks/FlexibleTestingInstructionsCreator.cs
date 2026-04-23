@@ -113,6 +113,9 @@ public class FlexibleTestingInstructionsCreator
                 case nameof(Overwrites.RecursiveMockInheritance):
                     instructions.RecursiveMockInheritance = true;
                     break;
+                case nameof(Overwrites.RemoveSealed):
+                    instructions.RemoveSealed = true;
+                    break;
             }
         }
 

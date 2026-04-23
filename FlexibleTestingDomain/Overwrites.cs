@@ -38,4 +38,6 @@ public class Overwrites
     public static void RecursiveMockInheritance() { }
 
     public static void InheritFrom<TClass>() { }
+
+    public static void RemoveSealed() { }
 }

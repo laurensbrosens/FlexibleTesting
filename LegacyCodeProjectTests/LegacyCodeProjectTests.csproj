@@ -27,6 +27,7 @@
 	<ItemGroup>
 		<ProjectReference Include="..\LegacyCodeProject\LegacyCodeProject.csproj" />
 		<ProjectReference Include="..\FlexibleTesting.Tasks\FlexibleTesting.Tasks.csproj" ReferenceOutputAssembly="false" />
+		<ProjectReference Include="..\FlexibleTestingDomain\FlexibleTestingDomain.csproj" />
 	</ItemGroup>
 
 	<!-- Visual Studio / Full MSBuild -->
