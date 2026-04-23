@@ -14,12 +14,6 @@ public partial class UserViewModel_G : UserViewModelBase_G
     }
 
     public string Token { get; set; }
-    public string ExtendedProperty { get; set; } = "ExtendedDefault";
-
-    public void ExtendedMethod()
-    {
-        Token = Token + "-extended";
-    }
 
     private readonly IAutoUserViewModelDependencies _dependencies;
 }
@@ -28,4 +22,14 @@ public partial class UserViewModel_G : UserViewModelBase_G
 public interface IAutoUserViewModelDependencies
 {
     Guid NewGuid();
+}
+
+public partial class UserViewModel_G
+{
+    public string ExtendedProperty { get; set; } = "ExtendedDefault";
+
+    public void ExtendedMethod()
+    {
+        Token = Token + "-extended";
+    }
 }

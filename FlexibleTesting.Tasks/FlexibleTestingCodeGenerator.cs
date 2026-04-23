@@ -94,6 +94,7 @@ public class FlexibleTestingCodeGenerator
             .OfType<ClassDeclarationSyntax>()
             .First(classNode => classNode.Identifier.Text == instructions.NewClassName);
 
+        var otherRewrittenParts = new List<SyntaxNode>();
         foreach (var otherPart in otherParts)
         {
             var otherModel = await otherPart.Document.GetSemanticModelAsync() ?? throw new InvalidOperationException("Could not get semantic model");
@@ -101,10 +102,7 @@ public class FlexibleTestingCodeGenerator
             var otherRewriter = new FlexibleTestingRewriter(otherModel, instructions, otherGenerator);
             var rewrittenOtherClass = (ClassDeclarationSyntax)otherRewriter.Visit(otherPart.Syntax)!;
 
-            foreach (var member in rewrittenOtherClass.Members)
-            {
-                syntaxEditor.AddMember(generatedClassSyntax, member);
-            }
+            otherRewrittenParts.Add(rewrittenOtherClass);
 
             var otherRoot = await otherPart.Document.GetSyntaxRootAsync() as CompilationUnitSyntax;
             if (otherRoot != null)
@@ -115,6 +113,11 @@ public class FlexibleTestingCodeGenerator
                         _requiredNamespaces.Add(u.Name.ToString());
                 }
             }
+        }
+
+        if (otherRewrittenParts.Any())
+        {
+            syntaxEditor.InsertAfter(generatedClassSyntax, otherRewrittenParts);
         }
 
         AddStructuralMembers(
