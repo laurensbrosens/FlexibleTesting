@@ -11,4 +11,5 @@ public partial class UserViewModel : UserViewModelBase
     }
 
     public string Token { get; set; }
+    public DateTime CreatedAt { get; set; }
 }

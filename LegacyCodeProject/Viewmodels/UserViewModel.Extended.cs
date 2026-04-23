@@ -9,5 +9,6 @@ public partial class UserViewModel
     public void ExtendedMethod()
     {
         Token = Token + "-extended";
+        CreatedAt = DateTime.Now;
     }
 }

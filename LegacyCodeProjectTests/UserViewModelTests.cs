@@ -48,6 +48,7 @@ public class UserViewModelTests
         baseDeps.UserService().Returns(expectedService);
         coreDeps.Now.Returns(() => expectedDate);
         deps.NewGuid().Returns(expectedGuid);
+        deps.Now.Returns(() => expectedDate);
         expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
 
         var vm = new UserViewModel_G(data, deps, baseDeps, coreDeps);
@@ -68,12 +69,16 @@ public class UserViewModelTests
         var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
         var deps = Substitute.For<IAutoUserViewModelDependencies>();
         var coreDeps = Substitute.For<IAutoViewModelCoreDependencies>();
+        var expectedDate = new DateTime(2026, 1, 1);
+        
+        deps.Now().Returns(expectedDate);
         
         var vm = new UserViewModel_G(data, deps, baseDeps, coreDeps);
 
         Assert.Multiple(() =>
         {
             Assert.That(vm.ExtendedProperty, Is.EqualTo("ExtendedDefault"));
+            Assert.That(vm.CreatedAt, Is.EqualTo(expectedDate));
             vm.ExtendedMethod();
             Assert.That(vm.Token, Does.EndWith("-extended"));
         });
