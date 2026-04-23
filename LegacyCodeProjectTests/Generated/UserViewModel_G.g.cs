@@ -5,17 +5,21 @@ using LegacyCodeProject.Viewmodels;
 using LegacyCodeProjectCore;
 
 namespace LegacyCodeProject.Viewmodels;
-public partial class UserViewModel_G : UserViewModelBase_G
+public partial class UserViewModel_G<T> : UserViewModelBase_G
 {
     public UserViewModel_G(SomeDataObject someDataObject, IAutoUserViewModelDependencies dependencies, IAutoUserViewModelBaseDependencies baseDependencies, IAutoViewModelCoreDependencies baseBaseDependencies) : base(someDataObject, baseDependencies, baseBaseDependencies)
     {
         _dependencies = dependencies;
         Token = _dependencies.NewGuid().ToString();
-        CreatedAt = _dependencies.Now();
     }
 
     public string Token { get; set; }
     public DateTime CreatedAt { get; set; }
+
+    public void GenericMethod<TMethod>(TMethod value)
+    {
+        Token = value?.ToString() ?? "null";
+    }
 
     private readonly IAutoUserViewModelDependencies _dependencies;
 }
@@ -27,7 +31,7 @@ public interface IAutoUserViewModelDependencies
     Func<DateTime> Now { get; set; }
 }
 
-public partial class UserViewModel_G
+public partial class UserViewModel_G<T>
 {
     public string ExtendedProperty { get; set; } = "ExtendedDefault";
 

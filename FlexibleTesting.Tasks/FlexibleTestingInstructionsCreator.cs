@@ -87,7 +87,18 @@ public class FlexibleTestingInstructionsCreator
             switch (methodSymbol.Name)
             {
                 case nameof(Overwrites.ForClass):
-                    targetTypeFromTest = methodSymbol.TypeArguments.FirstOrDefault() as INamedTypeSymbol;
+                    if (methodSymbol.IsGenericMethod)
+                    {
+                        targetTypeFromTest = methodSymbol.TypeArguments.FirstOrDefault() as INamedTypeSymbol;
+                    }
+                    else
+                    {
+                        var arg = instructionMethod.ArgumentList.Arguments.FirstOrDefault()?.Expression;
+                        if (arg is TypeOfExpressionSyntax typeOfExpression)
+                        {
+                            targetTypeFromTest = model.GetSymbolInfo(typeOfExpression.Type).Symbol as INamedTypeSymbol;
+                        }
+                    }
                     break;
                 case nameof(Overwrites.MakePublic):
                     AddToMakePublic(model, instructions.MethodsToMakePublic, instructionMethod);

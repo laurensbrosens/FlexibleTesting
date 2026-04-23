@@ -44,14 +44,28 @@ public class SymbolSignatureComparer : IEqualityComparer<ISymbol>
 
     private static bool MethodsMatch(IMethodSymbol methodA, IMethodSymbol methodB)
     {
+        if (methodA.Name != methodB.Name)
+        {
+            return false;
+        }
+
+        if (methodA.TypeParameters.Length != methodB.TypeParameters.Length)
+        {
+            return false;
+        }
+
         if (methodA.Parameters.Length != methodB.Parameters.Length)
         {
             return false;
         }
 
-        for (int i = 0; i < methodA.Parameters.Length; i++)
+        var methodAOrig = methodA.OriginalDefinition;
+        var methodBOrig = methodB.OriginalDefinition;
+
+        for (int i = 0; i < methodAOrig.Parameters.Length; i++)
         {
-            if (methodA.Parameters[i].Type.ToDisplayString() != methodB.Parameters[i].Type.ToDisplayString())
+            // Compare parameter types using ToDisplayString on the original definition to match type parameters correctly
+            if (methodAOrig.Parameters[i].Type.ToDisplayString() != methodBOrig.Parameters[i].Type.ToDisplayString())
             {
                 return false;
             }

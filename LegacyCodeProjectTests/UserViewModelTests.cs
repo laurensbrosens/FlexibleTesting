@@ -51,13 +51,16 @@ public class UserViewModelTests
         deps.Now.Returns(() => expectedDate);
         expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
 
-        var vm = new UserViewModel_G(data, deps, baseDeps, coreDeps);
+        var vm = new UserViewModel_G<string>(data, deps, baseDeps, coreDeps);
 
         Assert.Multiple(() =>
         {
             Assert.That(vm, Is.InstanceOf<UserViewModelBase_G>());
             Assert.That(vm.Name, Is.EqualTo("Base"));
-            Assert.That(vm.CreatedAt, Is.EqualTo(expectedDate));
+            // Note: vm.CreatedAt refers to the hidden property in UserViewModel_G<T>, 
+            // but the base constructor sets the one in ViewModelCore_G.
+            // We cast to base to verify it was set correctly by the base constructor.
+            Assert.That(((UserViewModelBase_G)vm).CreatedAt, Is.EqualTo(expectedDate));
             Assert.That(vm.Token, Is.EqualTo(expectedGuid.ToString()));
         });
     }
@@ -70,16 +73,18 @@ public class UserViewModelTests
         var deps = Substitute.For<IAutoUserViewModelDependencies>();
         var coreDeps = Substitute.For<IAutoViewModelCoreDependencies>();
         var expectedDate = new DateTime(2026, 1, 1);
-        
-        deps.Now().Returns(expectedDate);
-        
-        var vm = new UserViewModel_G(data, deps, baseDeps, coreDeps);
+
+        deps.Now.Returns(() => expectedDate);
+
+        var vm = new UserViewModel_G<string>(data, deps, baseDeps, coreDeps);
 
         Assert.Multiple(() =>
         {
             Assert.That(vm.ExtendedProperty, Is.EqualTo("ExtendedDefault"));
-            Assert.That(vm.CreatedAt, Is.EqualTo(expectedDate));
+            
             vm.ExtendedMethod();
+            
+            Assert.That(vm.CreatedAt, Is.EqualTo(expectedDate));
             Assert.That(vm.Token, Does.EndWith("-extended"));
         });
     }
@@ -100,7 +105,7 @@ public class UserViewModelTests
         deps.NewGuid().Returns(expectedGuid);
         expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
 
-        var vm = new UserViewModel_G(data, deps, baseDeps, coreDeps);
+        var vm = new UserViewModel_G<string>(data, deps, baseDeps, coreDeps);
 
         Assert.Multiple(() =>
         {
@@ -109,5 +114,25 @@ public class UserViewModelTests
             baseDeps.Received(1).UserService();
             deps.Received(1).NewGuid();
         });
+    }
+
+    [Test]
+    public void GenericMethod_WhenCalled_ShouldUpdateToken()
+    {
+        var data = new SomeDataObject();
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var coreDeps = Substitute.For<IAutoViewModelCoreDependencies>();
+
+        var vm = new UserViewModel_G<string>(data, deps, baseDeps, coreDeps);
+
+        vm.GenericMethod(123);
+        Assert.That(vm.Token, Is.EqualTo("123"));
+
+        vm.GenericMethod("hello");
+        Assert.That(vm.Token, Is.EqualTo("hello"));
+
+        vm.GenericMethod<object>(null);
+        Assert.That(vm.Token, Is.EqualTo("null"));
     }
 }

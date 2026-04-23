@@ -31,6 +31,8 @@ public class Overwrites
 
     public static void ForClass<TClass>() { }
 
+    public static void ForClass(Type type) { }
+
     public static void MockInheritance() { }
 
     public static void RecursiveMockInheritance() { }
