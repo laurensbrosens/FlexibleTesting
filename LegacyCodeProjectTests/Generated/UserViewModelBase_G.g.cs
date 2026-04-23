@@ -11,7 +11,7 @@ public class UserViewModelBase_G : ViewModelCore_G
         _dependencies = dependencies;
         SomeDataObject = someDataObject;
         Name = "Base";
-        CreatedAt = _dependencies.DateTime_Now();
+        CreatedAt = _dependencies.Now();
         _userService = _dependencies.UserService();
         SomeMethod();
     }
@@ -27,7 +27,7 @@ public class UserViewModelBase_G : ViewModelCore_G
 /// <summary>Mock this using NSubstitute</summary>
 public interface IAutoUserViewModelBaseDependencies
 {
-    Func<DateTime> DateTime_Now { get; set; }
+    Func<DateTime> Now { get; set; }
 
     IAutoUserService UserService();
 }

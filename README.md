@@ -1,5 +1,5 @@
 # FlexibleTesting
- 
+
 FlexibleTesting is a compile-time mocking framework for C#. It allows you to unit test legacy code, including WPF ViewModels, without heavy refactoring. It generates a "testable copy" with a `_G` suffix of your class and applies surgical rewrites to bypass side effects like static calls, database requests, and protected encapsulation.
 
 ## Getting Started

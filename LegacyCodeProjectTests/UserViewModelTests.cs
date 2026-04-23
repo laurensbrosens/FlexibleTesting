@@ -1,8 +1,12 @@
 namespace LegacyCodeProjectTests;
 
+using LegacyCodeProject.Core;
+using LegacyCodeProject.Viewmodels;
+using LegacyCodeProjectCore;
+using NSubstitute;
+
 public class UserViewModelTests
 {
-    /*
     [Test]
     public void BaseConstructor_WhenInitialized_ShouldApplyRecursiveBaseRewrites()
     {
@@ -12,9 +16,9 @@ public class UserViewModelTests
         var expectedDate = new DateTime(2026, 4, 15);
         var expectedService = Substitute.For<IAutoUserService>();
 
-        baseDeps.DateTime_Now.Returns(() => expectedDate);
+        baseDeps.Now.Returns(() => expectedDate);
         baseDeps.UserService().Returns(expectedService);
-        coreDeps.DateTime_Now.Returns(() => expectedDate);
+        coreDeps.Now.Returns(() => expectedDate);
         expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
 
         var vm = new UserViewModelBase_G(data, baseDeps, coreDeps);
@@ -40,9 +44,9 @@ public class UserViewModelTests
         var expectedGuid = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
         var expectedService = Substitute.For<IAutoUserService>();
 
-        baseDeps.DateTime_Now.Returns(() => expectedDate);
+        baseDeps.Now.Returns(() => expectedDate);
         baseDeps.UserService().Returns(expectedService);
-        coreDeps.DateTime_Now.Returns(() => expectedDate);
+        coreDeps.Now.Returns(() => expectedDate);
         deps.NewGuid().Returns(expectedGuid);
         deps.Now.Returns(() => expectedDate);
         expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
@@ -53,6 +57,9 @@ public class UserViewModelTests
         {
             Assert.That(vm, Is.InstanceOf<UserViewModelBase_G>());
             Assert.That(vm.Name, Is.EqualTo("Base"));
+            // Note: vm.CreatedAt refers to the hidden property in UserViewModel_G<T>, 
+            // but the base constructor sets the one in ViewModelCore_G.
+            // We cast to base to verify it was set correctly by the base constructor.
             Assert.That(((UserViewModelBase_G)vm).CreatedAt, Is.EqualTo(expectedDate));
             Assert.That(vm.Token, Is.EqualTo(expectedGuid.ToString()));
         });
@@ -92,11 +99,10 @@ public class UserViewModelTests
         var expectedGuid = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
         var expectedService = Substitute.For<IAutoUserService>();
 
-        baseDeps.DateTime_Now.Returns(() => new DateTime(2026, 4, 17));
+        baseDeps.Now.Returns(() => new DateTime(2026, 4, 17));
         baseDeps.UserService().Returns(expectedService);
-        coreDeps.DateTime_Now.Returns(() => new DateTime(2026, 4, 17));
+        coreDeps.Now.Returns(() => new DateTime(2026, 4, 17));
         deps.NewGuid().Returns(expectedGuid);
-        deps.Now.Returns(() => new DateTime(2026, 4, 17));
         expectedService.GetUserName(Arg.Any<string>()).Returns("base-user");
 
         var vm = new UserViewModel_G<string>(data, deps, baseDeps, coreDeps);
@@ -128,5 +134,5 @@ public class UserViewModelTests
 
         vm.GenericMethod<object>(null);
         Assert.That(vm.Token, Is.EqualTo("null"));
-    }*/
+    }
 }

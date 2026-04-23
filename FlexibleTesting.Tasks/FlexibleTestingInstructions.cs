@@ -20,7 +20,7 @@ public class FlexibleTestingInstructions
     public HashSet<IMethodSymbol> MethodsToMakePublic { get; } = new(SymbolSignatureComparer.Default);
 
     public HashSet<IMethodSymbol> MockMethods { get; } = new(SymbolSignatureComparer.Default);
-    public HashSet<IPropertySymbol> MockProperties { get; } = new(SymbolEqualityComparer.Default);
+    public HashSet<IPropertySymbol> MockProperties { get; } = new(SymbolSignatureComparer.Default);
     public HashSet<IFieldSymbol> MockFields { get; } = new(SymbolSignatureComparer.Default);
     public HashSet<INamedTypeSymbol> MockClasses { get; } = new(SymbolEqualityComparer.Default);
     public HashSet<IMethodSymbol> MockClassConstructors { get; } = new(SymbolSignatureComparer.Default);

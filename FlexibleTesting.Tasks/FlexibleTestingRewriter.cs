@@ -212,12 +212,6 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
         if (symbol != null && instructions.DependencyMemberNames.TryGetValue(symbol, out var dependencyName))
         {
-            if (node.Parent is AssignmentExpressionSyntax assignment && assignment.Left == node)
-            {
-                return generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName)
-                    .WithTriviaFrom(node);
-            }
-            
             return generator
                 .InvocationExpression(
                     generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName)
@@ -230,25 +224,6 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     public override SyntaxNode? VisitIdentifierName(IdentifierNameSyntax node)
     {
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
-        
-        if (symbol != null && instructions.DependencyMemberNames.TryGetValue(symbol, out var dependencyName))
-        {
-            if (node.Parent is AssignmentExpressionSyntax assignment && assignment.Left == node)
-            {
-                return generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName)
-                    .WithTriviaFrom(node);
-            }
-
-            if (symbol is IPropertySymbol propertySymbol && instructions.MockProperties.Contains(propertySymbol))
-            {
-                return generator
-                    .InvocationExpression(
-                        generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName)
-                    )
-                    .WithTriviaFrom(node);
-            }
-        }
-
         if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
             return SyntaxFactory.IdentifierName(FlexibleTestingGeneratedNames.GetMockClassInterfaceName(namedType.Name)).WithTriviaFrom(node);
 
