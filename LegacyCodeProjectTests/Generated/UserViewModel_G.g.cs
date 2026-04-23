@@ -14,6 +14,12 @@ public partial class UserViewModel_G : UserViewModelBase_G
     }
 
     public string Token { get; set; }
+    public string ExtendedProperty { get; set; } = "ExtendedDefault";
+
+    public void ExtendedMethod()
+    {
+        Token = Token + "-extended";
+    }
 
     private readonly IAutoUserViewModelDependencies _dependencies;
 }

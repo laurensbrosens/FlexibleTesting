@@ -62,6 +62,24 @@ public class UserViewModelTests
     }
 
     [Test]
+    public void MergedPartialMembers_ShouldBeAccessibleAndFunctional()
+    {
+        var data = new SomeDataObject();
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var coreDeps = Substitute.For<IAutoViewModelCoreDependencies>();
+        
+        var vm = new UserViewModel_G(data, deps, baseDeps, coreDeps);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.ExtendedProperty, Is.EqualTo("ExtendedDefault"));
+            vm.ExtendedMethod();
+            Assert.That(vm.Token, Does.EndWith("-extended"));
+        });
+    }
+
+    [Test]
     public void RecursiveBaseAndDerivedDependencies_ShouldStaySeparated()
     {
         var data = new SomeDataObject();

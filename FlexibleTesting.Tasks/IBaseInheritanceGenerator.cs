@@ -8,7 +8,7 @@ internal interface IBaseInheritanceGenerator
 {
     bool TryAddBaseInheritanceMembers(
         SyntaxEditor syntaxEditor,
-        ClassDeclarationSyntax classNode,
+        ClassDeclarationSyntax generatedClassNode,
         FlexibleTestingInstructions instructions,
         SemanticModel semanticModel,
         SyntaxGenerator syntaxGenerator

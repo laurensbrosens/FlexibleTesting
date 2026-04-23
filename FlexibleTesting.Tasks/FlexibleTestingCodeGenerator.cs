@@ -49,15 +49,13 @@ public class FlexibleTestingCodeGenerator
 
     public void Generate(FlexibleTestingInstructions instructions)
     {
-        var targetClassSyntax = instructions.TargetType.DeclaringSyntaxReferences[0].GetSyntax() as ClassDeclarationSyntax;
-        if (targetClassSyntax == null)
+        if (!instructions.Parts.Any())
             return;
 
-        var targetDocument = instructions.TargetDocument ?? _solution.GetDocument(targetClassSyntax.SyntaxTree);
-        if (targetDocument == null)
-            return;
+        var mainPart = instructions.Parts[0];
+        var targetDocument = mainPart.Document;
 
-        var rewrittenDocument = ApplyRewritesAsync(targetDocument, targetClassSyntax, instructions).GetAwaiter().GetResult();
+        var rewrittenDocument = ApplyRewritesAsync(targetDocument, instructions).GetAwaiter().GetResult();
         var rewrittenRoot = rewrittenDocument.GetSyntaxRootAsync().GetAwaiter().GetResult();
         var generatedCode = rewrittenRoot!.NormalizeWhitespace(elasticTrivia: true).ToFullString();
 
@@ -68,7 +66,6 @@ public class FlexibleTestingCodeGenerator
 
     private async Task<Document> ApplyRewritesAsync(
         Document document,
-        ClassDeclarationSyntax targetClassSyntax,
         FlexibleTestingInstructions instructions
     )
     {
@@ -80,6 +77,9 @@ public class FlexibleTestingCodeGenerator
             if (ancestorNamespace is { IsGlobalNamespace: false })
                 _requiredNamespaces.Add(ancestorNamespace.ToDisplayString());
         }
+
+        var mainPart = instructions.Parts.First(p => p.Document == document);
+        var otherParts = instructions.Parts.Where(p => p.Document != document).ToList();
 
         var syntaxRoot = await document.GetSyntaxRootAsync() ?? throw new InvalidOperationException("Could not get syntax root");
         var semanticModel = await document.GetSemanticModelAsync() ?? throw new InvalidOperationException("Could not get semantic model");
@@ -94,16 +94,39 @@ public class FlexibleTestingCodeGenerator
             .OfType<ClassDeclarationSyntax>()
             .First(classNode => classNode.Identifier.Text == instructions.NewClassName);
 
+        foreach (var otherPart in otherParts)
+        {
+            var otherModel = await otherPart.Document.GetSemanticModelAsync() ?? throw new InvalidOperationException("Could not get semantic model");
+            var otherGenerator = SyntaxGenerator.GetGenerator(otherPart.Document);
+            var otherRewriter = new FlexibleTestingRewriter(otherModel, instructions, otherGenerator);
+            var rewrittenOtherClass = (ClassDeclarationSyntax)otherRewriter.Visit(otherPart.Syntax)!;
+
+            foreach (var member in rewrittenOtherClass.Members)
+            {
+                syntaxEditor.AddMember(generatedClassSyntax, member);
+            }
+
+            var otherRoot = await otherPart.Document.GetSyntaxRootAsync() as CompilationUnitSyntax;
+            if (otherRoot != null)
+            {
+                foreach (var u in otherRoot.Usings)
+                {
+                    if (u.Name != null)
+                        _requiredNamespaces.Add(u.Name.ToString());
+                }
+            }
+        }
+
         AddStructuralMembers(
             syntaxEditor,
             generatedClassSyntax,
-            targetClassSyntax,
+            mainPart.Syntax,
             instructions,
             syntaxGenerator,
             semanticModel.Compilation
         );
 
-        if (instructions.MockInheritance && targetClassSyntax.BaseList != null && targetClassSyntax.BaseList.Types.Any())
+        if (instructions.MockInheritance && mainPart.Syntax.BaseList != null && mainPart.Syntax.BaseList.Types.Any())
             _baseInheritanceGenerator.TryAddBaseInheritanceMembers(syntaxEditor, generatedClassSyntax, instructions, semanticModel, syntaxGenerator);
 
         var changedRoot = syntaxEditor.GetChangedRoot();

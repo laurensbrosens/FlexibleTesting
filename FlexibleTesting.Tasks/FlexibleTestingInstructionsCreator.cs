@@ -113,28 +113,38 @@ public class FlexibleTestingInstructionsCreator
         if (targetTypeFromTest == null || targetTypeFromTest.TypeKind == TypeKind.Error)
             return null;
 
-        ClassDeclarationSyntax? targetClassNode = null;
-        Document? targetDocument = null;
-
-        var syntaxRef = targetTypeFromTest.DeclaringSyntaxReferences.FirstOrDefault();
-        if (syntaxRef != null)
+        var syntaxRefs = targetTypeFromTest.DeclaringSyntaxReferences;
+        if (syntaxRefs.Any())
         {
-            targetClassNode = syntaxRef.GetSyntax() as ClassDeclarationSyntax;
-            targetDocument = _solution.GetDocument(targetClassNode!.SyntaxTree);
-            instructions.TargetDocument = targetDocument;
+            foreach (var syntaxRef in syntaxRefs)
+            {
+                if (syntaxRef.GetSyntax() is ClassDeclarationSyntax targetClassNode)
+                {
+                    var targetDocument = _solution.GetDocument(targetClassNode.SyntaxTree);
+                    if (targetDocument != null)
+                    {
+                        instructions.Parts.Add(new FlexibleTestingPart { Document = targetDocument, Syntax = targetClassNode });
+                    }
+                }
+            }
         }
         else
         {
             var decompilationResult = TryDecompile(targetTypeFromTest);
-            targetClassNode = decompilationResult.node;
-            targetDocument = decompilationResult.doc;
-            instructions.TargetDocument = targetDocument;
+            if (decompilationResult.node != null && decompilationResult.doc != null)
+            {
+                instructions.Parts.Add(new FlexibleTestingPart { Document = decompilationResult.doc, Syntax = decompilationResult.node });
+            }
         }
 
-        if (targetClassNode == null || targetDocument == null)
+        if (!instructions.Parts.Any())
             return null;
 
-        var targetCompilation = targetDocument.Project.GetCompilationAsync().Result;
+        var mainPart = instructions.Parts[0];
+        var targetDocumentForCompilation = mainPart.Document;
+        var targetClassNodeForName = mainPart.Syntax;
+
+        var targetCompilation = targetDocumentForCompilation.Project.GetCompilationAsync().Result;
         if (targetCompilation == null)
             return null;
 
@@ -158,15 +168,15 @@ public class FlexibleTestingInstructionsCreator
                 instructions.MockClasses.Add(resolvedMockType);
         }
 
-        var oldName = targetClassNode.Identifier.Text;
+        var oldName = targetClassNodeForName.Identifier.Text;
         instructions.TargetType = targetTypeInLegacy;
         instructions.OldClassName = oldName;
         instructions.NewClassName = FlexibleTestingGeneratedNames.GetGeneratedClassName(oldName);
         instructions.DependenciesInterfaceName = FlexibleTestingGeneratedNames.GetDependenciesInterfaceName(oldName);
-        instructions.IsPartial = targetClassNode.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword));
+        instructions.IsPartial = instructions.Parts.Count > 1 || mainPart.Syntax.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword));
 
         MapMethodsToLegacy(instructions);
-        MapMockClassConstructors(instructions, targetClassNode, targetDocument);
+        MapMockClassConstructors(instructions, instructions.Parts.Select(p => p.Syntax), targetDocumentForCompilation);
 
         return instructions;
     }
@@ -392,7 +402,7 @@ public class FlexibleTestingInstructionsCreator
 
     private void MapMockClassConstructors(
         FlexibleTestingInstructions instructions,
-        ClassDeclarationSyntax targetClassNode,
+        IEnumerable<ClassDeclarationSyntax> targetClassNodes,
         Document targetDocument
     )
     {
@@ -404,13 +414,16 @@ public class FlexibleTestingInstructionsCreator
         if (legacyModel == null)
             return;
 
-        foreach (var creation in targetClassNode.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
+        foreach (var targetClassNode in targetClassNodes)
         {
-            if (legacyModel.GetSymbolInfo(creation).Symbol is not IMethodSymbol ctor)
-                continue;
+            foreach (var creation in targetClassNode.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
+            {
+                if (legacyModel.GetSymbolInfo(creation).Symbol is not IMethodSymbol ctor)
+                    continue;
 
-            if (mockedTypes.Any(t => SymbolEqualityComparer.Default.Equals(t, ctor.ContainingType)))
-                instructions.MockClassConstructors.Add(ctor);
+                if (mockedTypes.Any(t => SymbolEqualityComparer.Default.Equals(t, ctor.ContainingType)))
+                    instructions.MockClassConstructors.Add(ctor);
+            }
         }
     }
 

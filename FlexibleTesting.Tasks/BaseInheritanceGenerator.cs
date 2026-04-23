@@ -20,7 +20,7 @@ internal sealed class BaseInheritanceGenerator : IBaseInheritanceGenerator
 
     public bool TryAddBaseInheritanceMembers(
         SyntaxEditor syntaxEditor,
-        ClassDeclarationSyntax classNode,
+        ClassDeclarationSyntax generatedClassNode,
         FlexibleTestingInstructions instructions,
         SemanticModel semanticModel,
         SyntaxGenerator syntaxGenerator
@@ -31,7 +31,7 @@ internal sealed class BaseInheritanceGenerator : IBaseInheritanceGenerator
             return false;
 
         var usedBaseMembers = ExtractUsedBaseMembers(
-            (ClassDeclarationSyntax)instructions.TargetType.DeclaringSyntaxReferences[0].GetSyntax(),
+            instructions.Parts.Select(p => p.Syntax),
             instructions.TargetType,
             semanticModel
         );
@@ -40,7 +40,7 @@ internal sealed class BaseInheritanceGenerator : IBaseInheritanceGenerator
 
         var baseDependenciesInterfaceName = _namePolicy.GetBaseDependenciesInterfaceName(instructions.OldClassName);
         syntaxEditor.InsertBefore(
-            classNode,
+            generatedClassNode,
             BuildBaseClassReplacement(
                 syntaxGenerator,
                 instructions.OldClassName,
@@ -51,7 +51,7 @@ internal sealed class BaseInheritanceGenerator : IBaseInheritanceGenerator
             )
         );
         syntaxEditor.InsertBefore(
-            classNode,
+            generatedClassNode,
             BuildBaseDependenciesInterface(syntaxGenerator, instructions.OldClassName, usedBaseMembers)
         );
 
@@ -240,7 +240,7 @@ internal sealed class BaseInheritanceGenerator : IBaseInheritanceGenerator
     }
 
     private static List<ISymbol> ExtractUsedBaseMembers(
-        ClassDeclarationSyntax derivedNode,
+        IEnumerable<ClassDeclarationSyntax> targetClassNodes,
         INamedTypeSymbol targetSymbol,
         SemanticModel semanticModel
     )
@@ -250,19 +250,22 @@ internal sealed class BaseInheritanceGenerator : IBaseInheritanceGenerator
             return new List<ISymbol>();
 
         var usedSymbols = new List<ISymbol>();
-        foreach (var syntaxNode in derivedNode.DescendantNodes())
+        foreach (var classNode in targetClassNodes)
         {
-            var symbol = syntaxNode switch
+            foreach (var syntaxNode in classNode.DescendantNodes())
             {
-                InvocationExpressionSyntax invocationExpression => semanticModel.GetSymbolInfo(invocationExpression.Expression).Symbol,
-                MemberAccessExpressionSyntax memberAccessExpression => semanticModel.GetSymbolInfo(memberAccessExpression).Symbol,
-                IdentifierNameSyntax identifierName when identifierName.Parent is not MemberAccessExpressionSyntax
-                    => semanticModel.GetSymbolInfo(identifierName).Symbol,
-                _ => null,
-            };
+                var symbol = syntaxNode switch
+                {
+                    InvocationExpressionSyntax invocationExpression => semanticModel.GetSymbolInfo(invocationExpression.Expression).Symbol,
+                    MemberAccessExpressionSyntax memberAccessExpression => semanticModel.GetSymbolInfo(memberAccessExpression).Symbol,
+                    IdentifierNameSyntax identifierName when identifierName.Parent is not MemberAccessExpressionSyntax
+                        => semanticModel.GetSymbolInfo(identifierName).Symbol,
+                    _ => null,
+                };
 
-            if (symbol != null && baseTypeSymbol.GetMembers().Contains(symbol, SymbolEqualityComparer.Default) && !usedSymbols.Contains(symbol, SymbolEqualityComparer.Default))
-                usedSymbols.Add(symbol);
+                if (symbol != null && baseTypeSymbol.GetMembers().Contains(symbol, SymbolEqualityComparer.Default) && !usedSymbols.Contains(symbol, SymbolEqualityComparer.Default))
+                    usedSymbols.Add(symbol);
+            }
         }
 
         return usedSymbols;

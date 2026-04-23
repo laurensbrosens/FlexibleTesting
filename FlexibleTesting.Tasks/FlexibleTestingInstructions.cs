@@ -1,12 +1,19 @@
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Collections.Generic;
 
 namespace FlexibleTesting.Tasks;
 
+public class FlexibleTestingPart
+{
+    public Document Document { get; set; } = null!;
+    public ClassDeclarationSyntax Syntax { get; set; } = null!;
+}
+
 public class FlexibleTestingInstructions
 {
     public INamedTypeSymbol TargetType { get; set; } = null!;
-    public Document? TargetDocument { get; set; } = null!;
+    public List<FlexibleTestingPart> Parts { get; } = new();
     public string OldClassName { get; set; } = string.Empty;
     public string NewClassName { get; set; } = string.Empty;
 
