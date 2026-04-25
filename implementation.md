@@ -4,17 +4,18 @@ Steps implementation of sourcegenerator:
 3. DONE (with Mock) Overwrites.ReplaceProperty
 4. DONE (with Mock) Overwrites.Replace
 5. Overwrites.InheritFrom (probably easier than MockInheritance?)
-6. Overwrites.MockInheritance (spicy)
+6. DONE Overwrites.MockInheritance (spicy)
 7. DONE Overwrites.Mock<> (spicy)
 8. Implement Overwrites.Include (to allow a common base builder), last because not required
 9. Split the generated code into separate classes (does this work well with the usings?)
-10. AutoMockInheritance (a builder for every parent is required, if not possible use the current stub approach)
+10. DONE AutoMockInheritance (a builder for every parent is required, if not possible use the current stub approach)
 
 ToDO:
-•	Partial support!
-•	Generics support!
-•	Replace i.p.v. mock () so unittests dont have to arrange everything
-•	Bugfix for DateTime.Now and prop Now they now have duplicate names IDependencies!
+•	DONE Partial support!
+•	DONE Generics support!
+•	DONE sealed support
+•	Add Overwrites.Replace instead of only mock () so unittests dont have to arrange everything
+•	DONE Bugfix for DateTime.Now and prop Now they now have duplicate names IDependencies!
 
 
 Worst case, I don't use a sourcegenerator and simply run the builder as a script and create a real class
