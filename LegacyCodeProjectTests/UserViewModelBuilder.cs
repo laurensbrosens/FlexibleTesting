@@ -12,6 +12,7 @@ internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewMod
         Overwrites.ForClass(typeof(UserViewModel<>));
         Overwrites.Mock(() => Guid.NewGuid());
         Overwrites.Mock(() => DateTime.Now);
+        Overwrites.MockSignature(() => Now);
         Overwrites.RecursiveMockInheritance();
         Overwrites.MakePublic<Action<int>>(GenericMethod);
     }

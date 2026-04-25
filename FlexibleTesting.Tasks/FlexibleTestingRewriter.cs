@@ -212,11 +212,12 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
         if (symbol != null && instructions.DependencyMemberNames.TryGetValue(symbol, out var dependencyName))
         {
-            return generator
-                .InvocationExpression(
-                    generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName)
-                )
-                .WithTriviaFrom(node);
+            var memberAccess = generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName);
+            if (symbol is IMethodSymbol)
+            {
+                return generator.InvocationExpression(memberAccess).WithTriviaFrom(node);
+            }
+            return memberAccess.WithTriviaFrom(node);
         }
         return base.VisitMemberAccessExpression(node);
     }
@@ -226,6 +227,16 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
         if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
             return SyntaxFactory.IdentifierName(FlexibleTestingGeneratedNames.GetMockClassInterfaceName(namedType.Name)).WithTriviaFrom(node);
+
+        if (symbol != null && instructions.DependencyMemberNames.TryGetValue(symbol, out var dependencyName))
+        {
+            var memberAccess = generator.MemberAccessExpression(generator.IdentifierName(instructions.DependenciesFieldName), dependencyName);
+            if (symbol is IMethodSymbol)
+            {
+                return generator.InvocationExpression(memberAccess).WithTriviaFrom(node);
+            }
+            return memberAccess.WithTriviaFrom(node);
+        }
 
         return base.VisitIdentifierName(node);
     }

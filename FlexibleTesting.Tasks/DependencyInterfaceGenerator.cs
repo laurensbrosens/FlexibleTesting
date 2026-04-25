@@ -117,13 +117,32 @@ internal sealed class DependencyInterfaceGenerator : IDependencyInterfaceGenerat
         string dependencyMemberName
     )
     {
-        var dependencyDelegateType = _syntaxFactory.ResolveMockableDelegateType(compilation, mockableSymbol);
+        var type = mockableSymbol switch
+        {
+            IPropertySymbol propertySymbol => propertySymbol.Type,
+            IFieldSymbol fieldSymbol => fieldSymbol.Type,
+            _ => throw new System.ArgumentException("Unsupported symbol kind", nameof(mockableSymbol)),
+        };
+
         var propertyDeclaration = (PropertyDeclarationSyntax)
             syntaxGenerator.PropertyDeclaration(
                 dependencyMemberName,
-                syntaxGenerator.TypeExpression(dependencyDelegateType),
+                syntaxGenerator.TypeExpression(type),
                 accessibility: Accessibility.Public
             );
+
+        // Add both get and set to make it mockable/assignable
+        propertyDeclaration = propertyDeclaration.WithAccessorList(
+            SyntaxFactory.AccessorList(
+                SyntaxFactory.List(
+                    new[]
+                    {
+                        SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)),
+                        SyntaxFactory.AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)),
+                    }
+                )
+            )
+        );
 
         foreach (var attributeSyntax in _syntaxFactory.CreateAttributes(mockableSymbol))
             propertyDeclaration = (PropertyDeclarationSyntax)syntaxGenerator.AddAttributes(propertyDeclaration, attributeSyntax);

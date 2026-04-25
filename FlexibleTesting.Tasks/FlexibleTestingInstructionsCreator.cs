@@ -105,7 +105,10 @@ public class FlexibleTestingInstructionsCreator
                     break;
                 case nameof(Overwrites.Mock):
                     AddClassMock(instructions, methodSymbol, instructionMethod);
-                    AddToMock(model, instructions, instructionMethod);
+                    AddToMock(model, instructions, instructionMethod, useSignature: false);
+                    break;
+                case nameof(Overwrites.MockSignature):
+                    AddToMock(model, instructions, instructionMethod, useSignature: true);
                     break;
                 case nameof(Overwrites.MockInheritance):
                     instructions.MockInheritance = true;
@@ -352,7 +355,7 @@ public class FlexibleTestingInstructionsCreator
         }
     }
 
-    private void AddToMock(SemanticModel model, FlexibleTestingInstructions instructions, InvocationExpressionSyntax invocation)
+    private void AddToMock(SemanticModel model, FlexibleTestingInstructions instructions, InvocationExpressionSyntax invocation, bool useSignature)
     {
         var arg = invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression;
         ISymbol? symbol = null;
@@ -382,20 +385,32 @@ public class FlexibleTestingInstructionsCreator
         else if (arg is IdentifierNameSyntax id)
             symbol = model.GetSymbolInfo(id).Symbol;
 
-        if (symbol is IMethodSymbol m)
-            instructions.MockMethods.Add(m);
-        else if (symbol is IPropertySymbol p)
-            instructions.MockProperties.Add(p);
-        else if (symbol is IFieldSymbol f)
-            instructions.MockFields.Add(f);
-        else if (symbol is INamedTypeSymbol namedType && namedType.TypeKind == TypeKind.Class)
+        if (symbol == null) return;
+
+        if (useSignature)
         {
-            instructions.MockClasses.Add(namedType);
-            instructions.DependencyMemberNames[namedType] = namedType.Name;
+            if (symbol is IMethodSymbol m) instructions.MockMethodsSignature.Add(m);
+            else if (symbol is IPropertySymbol p) instructions.MockPropertiesSignature.Add(p);
+            else if (symbol is IFieldSymbol f) instructions.MockFieldsSignature.Add(f);
+        }
+        else
+        {
+            if (symbol is IMethodSymbol m) instructions.MockMethods.Add(m);
+            else if (symbol is IPropertySymbol p) instructions.MockProperties.Add(p);
+            else if (symbol is IFieldSymbol f) instructions.MockFields.Add(f);
+            else if (symbol is INamedTypeSymbol namedType && namedType.TypeKind == TypeKind.Class)
+            {
+                instructions.MockClasses.Add(namedType);
+                instructions.DependencyMemberNames[namedType] = namedType.Name;
+            }
         }
 
-        if (symbol != null)
-            instructions.DependencyMemberNames[symbol] = symbol.Name;
+        string name = symbol.Name;
+        if (symbol.IsStatic && (symbol is IPropertySymbol || symbol is IMethodSymbol || symbol is IFieldSymbol))
+        {
+            name = $"{symbol.ContainingType.Name}_{symbol.Name}";
+        }
+        instructions.DependencyMemberNames[symbol] = name;
     }
 
     private void AddClassMock(FlexibleTestingInstructions instructions, IMethodSymbol methodSymbol, InvocationExpressionSyntax invocation)

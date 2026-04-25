@@ -8,10 +8,13 @@ public partial class UserViewModel<T> : UserViewModelBase
         : base(someDataObject)
     {
         Token = Guid.NewGuid().ToString();
+        Now = DateTime.Now;
+        var test1 = Now;
+        var test2 = DateTime.Now;
     }
 
     public string Token { get; set; }
-    public DateTime CreatedAt { get; set; }
+    public DateTime Now {  get; set; }
 
     protected void GenericMethod<TMethod>(TMethod value)
     {

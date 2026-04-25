@@ -13,6 +13,9 @@ public class Overwrites
     public static void Mock<TDelegate>(TDelegate value)
         where TDelegate : Delegate { }
 
+    public static void MockSignature<TDelegate>(TDelegate value)
+        where TDelegate : Delegate { }
+
     public static void MakePublic<TInterface, TDelegate>(Expression<Func<TInterface, TDelegate>> methodSelector)
         where TDelegate : Delegate { }
 

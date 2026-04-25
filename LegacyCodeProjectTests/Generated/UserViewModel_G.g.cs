@@ -10,11 +10,14 @@ public partial class UserViewModel_G<T> : UserViewModelBase_G
     public UserViewModel_G(SomeDataObject someDataObject, IAutoUserViewModelDependencies dependencies, IAutoUserViewModelBaseDependencies baseDependencies, IAutoViewModelCoreDependencies baseBaseDependencies) : base(someDataObject, baseDependencies, baseBaseDependencies)
     {
         _dependencies = dependencies;
-        Token = _dependencies.NewGuid().ToString();
+        Token = _dependencies.Guid_NewGuid().ToString();
+        Now = _dependencies.DateTime_Now;
+        var test1 = Now;
+        var test2 = _dependencies.DateTime_Now;
     }
 
     public string Token { get; set; }
-    public DateTime CreatedAt { get; set; }
+    public DateTime Now { get; set; }
 
     public void GenericMethod<TMethod>(TMethod value)
     {
@@ -27,8 +30,8 @@ public partial class UserViewModel_G<T> : UserViewModelBase_G
 /// <summary>Mock this using NSubstitute</summary>
 public interface IAutoUserViewModelDependencies
 {
-    Guid NewGuid();
-    Func<DateTime> Now { get; set; }
+    Guid Guid_NewGuid();
+    DateTime DateTime_Now { get; set; }
 }
 
 public partial class UserViewModel_G<T>
@@ -38,6 +41,6 @@ public partial class UserViewModel_G<T>
     public void ExtendedMethod()
     {
         Token = Token + "-extended";
-        CreatedAt = _dependencies.Now();
+        Now = _dependencies.DateTime_Now;
     }
 }

@@ -9,7 +9,7 @@ public class ViewModelCore_G(string testString, IAutoViewModelCoreDependencies d
 
     protected void SomeMethod()
     {
-        CreatedAt = _dependencies.Now();
+        CreatedAt = _dependencies.DateTime_Now;
     }
 
     private readonly IAutoViewModelCoreDependencies _dependencies = dependencies;
@@ -18,5 +18,5 @@ public class ViewModelCore_G(string testString, IAutoViewModelCoreDependencies d
 /// <summary>Mock this using NSubstitute</summary>
 public interface IAutoViewModelCoreDependencies
 {
-    Func<DateTime> Now { get; set; }
+    DateTime DateTime_Now { get; set; }
 }
