@@ -107,8 +107,12 @@ public class FlexibleTestingInstructionsCreator
                     AddClassMock(instructions, methodSymbol, instructionMethod);
                     AddToMock(model, instructions, instructionMethod, useSignature: false);
                     break;
-                case nameof(Overwrites.MockSignature):
-                    AddToMock(model, instructions, instructionMethod, useSignature: true);
+                case nameof(Overwrites.Include):
+                    if (methodSymbol.IsGenericMethod)
+                    {
+                        var includedType = methodSymbol.TypeArguments.FirstOrDefault() as INamedTypeSymbol;
+                        if (includedType != null) instructions.IncludedBuilders.Add(includedType);
+                    }
                     break;
                 case nameof(Overwrites.MockInheritance):
                     instructions.MockInheritance = true;
@@ -194,8 +198,45 @@ public class FlexibleTestingInstructionsCreator
 
         MapMethodsToLegacy(instructions);
         MapMockClassConstructors(instructions, instructions.Parts.Select(p => p.Syntax), targetDocumentForCompilation);
+        
+        MergeIncludedInstructions(instructions);
 
         return instructions;
+    }
+
+    private void MergeIncludedInstructions(FlexibleTestingInstructions instructions)
+    {
+        var visited = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        var queue = new Queue<INamedTypeSymbol>(instructions.IncludedBuilders);
+
+        while (queue.Count > 0)
+        {
+            var builderType = queue.Dequeue();
+            if (!visited.Add(builderType)) continue;
+
+            var syntaxRef = builderType.DeclaringSyntaxReferences.FirstOrDefault();
+            if (syntaxRef?.GetSyntax() is ClassDeclarationSyntax builderNode)
+            {
+                var doc = _solution.GetDocument(builderNode.SyntaxTree);
+                if (doc != null)
+                {
+                    var model = doc.GetSemanticModelAsync().Result;
+                    if (model != null)
+                    {
+                        var includedInstructions = Create(builderNode, model);
+                        if (includedInstructions != null)
+                        {
+                            foreach (var method in includedInstructions.MockMethods) instructions.MockMethods.Add(method);
+                            foreach (var prop in includedInstructions.MockProperties) instructions.MockProperties.Add(prop);
+                            foreach (var field in includedInstructions.MockFields) instructions.MockFields.Add(field);
+                            foreach (var cls in includedInstructions.MockClasses) instructions.MockClasses.Add(cls);
+                            foreach (var kvp in includedInstructions.DependencyMemberNames) instructions.DependencyMemberNames[kvp.Key] = kvp.Value;
+                            foreach (var included in includedInstructions.IncludedBuilders) queue.Enqueue(included);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private (ClassDeclarationSyntax? node, Document? doc) TryDecompile(INamedTypeSymbol symbol)

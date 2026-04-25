@@ -29,6 +29,7 @@ public class FlexibleTestingInstructions
     
     public HashSet<INamedTypeSymbol> MockClasses { get; } = new(SymbolEqualityComparer.Default);
     public HashSet<IMethodSymbol> MockClassConstructors { get; } = new(SymbolSignatureComparer.Default);
+    public HashSet<INamedTypeSymbol> IncludedBuilders { get; } = new(SymbolEqualityComparer.Default);
 
     /// <summary>
     /// Maps a symbol to its unique name in the dependencies interface.
