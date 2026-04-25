@@ -8,12 +8,12 @@ public static class SymbolExtensions
     {
         public bool IsDeclaredIn(ISymbol? typeSymbol)
         {
-            return SymbolEqualityComparer.Default.Equals(symbol?.ContainingType, typeSymbol);
+            return SymbolSignatureComparer.Default.Equals(symbol?.ContainingType, typeSymbol);
         }
 
         public bool IsEqualToSymbol(ISymbol? symbol2)
         {
-            return SymbolEqualityComparer.Default.Equals(symbol, symbol2);
+            return SymbolSignatureComparer.Default.Equals(symbol, symbol2);
         }
     }
 }

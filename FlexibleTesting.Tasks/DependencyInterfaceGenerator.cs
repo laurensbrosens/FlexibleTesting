@@ -39,7 +39,7 @@ internal sealed class DependencyInterfaceGenerator : IDependencyInterfaceGenerat
         {
             var mockClassInterfaceName = _namePolicy.GetMockClassInterfaceName(mockedTypeSymbol.Name);
             return instructions.MockClassConstructors
-                .Where(constructorSymbol => SymbolEqualityComparer.Default.Equals(constructorSymbol.ContainingType, mockedTypeSymbol))
+                .Where(constructorSymbol => SymbolSignatureComparer.Default.Equals(constructorSymbol.ContainingType, mockedTypeSymbol))
                 .OrderBy(constructorSymbol => constructorSymbol.Parameters.Length)
                 .Select(
                     constructorSymbol =>

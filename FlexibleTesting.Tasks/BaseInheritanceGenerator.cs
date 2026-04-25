@@ -263,7 +263,7 @@ internal sealed class BaseInheritanceGenerator : IBaseInheritanceGenerator
                     _ => null,
                 };
 
-                if (symbol != null && baseTypeSymbol.GetMembers().Contains(symbol, SymbolEqualityComparer.Default) && !usedSymbols.Contains(symbol, SymbolEqualityComparer.Default))
+                if (symbol != null && baseTypeSymbol.GetMembers().Contains(symbol, SymbolSignatureComparer.Default) && !usedSymbols.Contains(symbol, SymbolSignatureComparer.Default))
                     usedSymbols.Add(symbol);
             }
         }

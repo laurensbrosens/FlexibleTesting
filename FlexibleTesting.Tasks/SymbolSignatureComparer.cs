@@ -19,31 +19,113 @@ public class SymbolSignatureComparer : IEqualityComparer<ISymbol>
             return false;
         }
 
-        if (symbolA.Name != symbolB.Name)
+        var a = symbolA.OriginalDefinition;
+        var b = symbolB.OriginalDefinition;
+
+        if (a.Kind != b.Kind)
         {
             return false;
         }
 
-        if (symbolA.Kind != symbolB.Kind)
+        if (a.Name != b.Name)
         {
             return false;
         }
 
-        if (symbolA is IMethodSymbol methodA && symbolB is IMethodSymbol methodB)
+        if (!ContainingTypesMatch(a, b))
+        {
+            return false;
+        }
+
+        if (!NamespacesMatch(a, b))
+        {
+            return false;
+        }
+
+        if (a is IMethodSymbol methodA && b is IMethodSymbol methodB)
         {
             return MethodsMatch(methodA, methodB);
         }
 
-        return true; // For other kinds, name match is enough for our purposes (fields/properties)
+        if (a is IPropertySymbol propA && b is IPropertySymbol propB)
+        {
+            return TypesMatch(propA.Type, propB.Type);
+        }
+
+        if (a is IFieldSymbol fieldA && b is IFieldSymbol fieldB)
+        {
+            return TypesMatch(fieldA.Type, fieldB.Type);
+        }
+
+        return true;
     }
 
     public int GetHashCode(ISymbol symbol)
     {
-        return symbol.Name.GetHashCode() ^ symbol.Kind.GetHashCode();
+        var s = symbol.OriginalDefinition;
+        var hash = s.Name.GetHashCode() ^ s.Kind.GetHashCode();
+        if (s.ContainingType != null)
+        {
+            hash ^= s.ContainingType.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat).GetHashCode();
+        }
+        else if (s.ContainingNamespace != null)
+        {
+            hash ^= s.ContainingNamespace.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat).GetHashCode();
+        }
+        return hash;
+    }
+
+    private static bool ContainingTypesMatch(ISymbol a, ISymbol b)
+    {
+        if (a.ContainingType == null && b.ContainingType == null)
+        {
+            return true;
+        }
+
+        if (a.ContainingType == null || b.ContainingType == null)
+        {
+            return false;
+        }
+
+        return a.ContainingType.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+            == b.ContainingType.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+    }
+
+    private static bool NamespacesMatch(ISymbol a, ISymbol b)
+    {
+        if (a.ContainingNamespace == null && b.ContainingNamespace == null)
+        {
+            return true;
+        }
+
+        if (a.ContainingNamespace == null || b.ContainingNamespace == null)
+        {
+            return false;
+        }
+
+        return a.ContainingNamespace.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+            == b.ContainingNamespace.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+    }
+
+    private static bool TypesMatch(ITypeSymbol? a, ITypeSymbol? b)
+    {
+        if (a == null && b == null)
+        {
+            return true;
+        }
+
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        return a.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+            == b.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
     }
 
     private static bool MethodsMatch(IMethodSymbol methodA, IMethodSymbol methodB)
     {
+        // methodA and methodB are already OriginalDefinitions from Equals
         if (methodA.Name != methodB.Name)
         {
             return false;
@@ -59,13 +141,18 @@ public class SymbolSignatureComparer : IEqualityComparer<ISymbol>
             return false;
         }
 
-        var methodAOrig = methodA.OriginalDefinition;
-        var methodBOrig = methodB.OriginalDefinition;
-
-        for (int i = 0; i < methodAOrig.Parameters.Length; i++)
+        if (!TypesMatch(methodA.ReturnType, methodB.ReturnType))
         {
-            // Compare parameter types using ToDisplayString on the original definition to match type parameters correctly
-            if (methodAOrig.Parameters[i].Type.ToDisplayString() != methodBOrig.Parameters[i].Type.ToDisplayString())
+            return false;
+        }
+
+        for (int i = 0; i < methodA.Parameters.Length; i++)
+        {
+            // Compare parameter types using OriginalDefinition to match type parameters correctly
+            if (
+                methodA.Parameters[i].Type.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+                != methodB.Parameters[i].Type.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+            )
             {
                 return false;
             }

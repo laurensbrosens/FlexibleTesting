@@ -16,6 +16,7 @@ ToDO:
 •	DONE sealed support
 •	Add Overwrites.Replace instead of only mock () so unittests dont have to arrange everything
 •	DONE Bugfix for DateTime.Now and prop Now they now have duplicate names IDependencies!
+•	Add a Overwrites method to set boolean properties to a specific value (always true/false)
 
 
 Worst case, I don't use a sourcegenerator and simply run the builder as a script and create a real class

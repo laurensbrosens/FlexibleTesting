@@ -11,8 +11,8 @@ public partial class UserViewModel_G<T> : UserViewModelBase_G
     {
         _dependencies = dependencies;
         Token = _dependencies.Guid_NewGuid().ToString();
-        Now = _dependencies.DateTime_Now;
-        var test1 = Now;
+        _dependencies.Now = _dependencies.DateTime_Now;
+        var test1 = _dependencies.Now;
         var test2 = _dependencies.DateTime_Now;
     }
 
@@ -32,6 +32,8 @@ public interface IAutoUserViewModelDependencies
 {
     Guid Guid_NewGuid();
     DateTime DateTime_Now { get; set; }
+
+    DateTime Now { get; set; }
 }
 
 public partial class UserViewModel_G<T>
@@ -41,6 +43,6 @@ public partial class UserViewModel_G<T>
     public void ExtendedMethod()
     {
         Token = Token + "-extended";
-        Now = _dependencies.DateTime_Now;
+        _dependencies.Now = _dependencies.DateTime_Now;
     }
 }

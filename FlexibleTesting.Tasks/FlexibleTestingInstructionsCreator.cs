@@ -176,7 +176,7 @@ public class FlexibleTestingInstructionsCreator
 
         if (instructions.MockClasses.Count > 0)
         {
-            var resolvedMockClasses = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+            var resolvedMockClasses = new HashSet<INamedTypeSymbol>(SymbolSignatureComparer.Default);
             foreach (var mockType in instructions.MockClasses)
             {
                 var resolvedMockType = targetCompilation.GetTypeByMetadataName(GetTypeMetadataName(mockType));
@@ -206,7 +206,7 @@ public class FlexibleTestingInstructionsCreator
 
     private void MergeIncludedInstructions(FlexibleTestingInstructions instructions)
     {
-        var visited = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        var visited = new HashSet<INamedTypeSymbol>(SymbolSignatureComparer.Default);
         var queue = new Queue<INamedTypeSymbol>(instructions.IncludedBuilders);
 
         while (queue.Count > 0)
@@ -491,7 +491,7 @@ public class FlexibleTestingInstructionsCreator
                 if (legacyModel.GetSymbolInfo(creation).Symbol is not IMethodSymbol ctor)
                     continue;
 
-                if (mockedTypes.Any(t => SymbolEqualityComparer.Default.Equals(t, ctor.ContainingType)))
+                if (mockedTypes.Any(t => SymbolSignatureComparer.Default.Equals(t, ctor.ContainingType)))
                     instructions.MockClassConstructors.Add(ctor);
             }
         }

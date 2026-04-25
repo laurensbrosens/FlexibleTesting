@@ -193,7 +193,7 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     {
         var constructor = semanticModel.GetSymbolInfo(node).Symbol as IMethodSymbol;
         var containingType = constructor?.ContainingType;
-        if (containingType != null && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, containingType)))
+        if (containingType != null && instructions.MockClasses.Contains(containingType))
         {
             var dependencyName = containingType.Name;
             var arguments = node.ArgumentList?.Arguments.Select(a => a.Expression) ?? Enumerable.Empty<ExpressionSyntax>();
@@ -225,7 +225,7 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     public override SyntaxNode? VisitIdentifierName(IdentifierNameSyntax node)
     {
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
-        if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
+        if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Contains(namedType))
             return SyntaxFactory.IdentifierName(FlexibleTestingGeneratedNames.GetMockClassInterfaceName(namedType.Name)).WithTriviaFrom(node);
 
         if (symbol != null && instructions.DependencyMemberNames.TryGetValue(symbol, out var dependencyName))
@@ -244,7 +244,7 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     public override SyntaxNode? VisitQualifiedName(QualifiedNameSyntax node)
     {
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
-        if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
+        if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Contains(namedType))
             return SyntaxFactory.IdentifierName(FlexibleTestingGeneratedNames.GetMockClassInterfaceName(namedType.Name)).WithTriviaFrom(node);
 
         return base.VisitQualifiedName(node);
@@ -253,7 +253,7 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
     public override SyntaxNode? VisitAliasQualifiedName(AliasQualifiedNameSyntax node)
     {
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
-        if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Any(t => SymbolEqualityComparer.Default.Equals(t, namedType)))
+        if (symbol is INamedTypeSymbol namedType && instructions.MockClasses.Contains(namedType))
             return SyntaxFactory.IdentifierName(FlexibleTestingGeneratedNames.GetMockClassInterfaceName(namedType.Name)).WithTriviaFrom(node);
 
         return base.VisitAliasQualifiedName(node);

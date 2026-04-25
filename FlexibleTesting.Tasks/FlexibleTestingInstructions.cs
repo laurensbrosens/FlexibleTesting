@@ -19,22 +19,22 @@ public class FlexibleTestingInstructions
 
     public HashSet<IMethodSymbol> MethodsToMakePublic { get; } = new(SymbolSignatureComparer.Default);
 
-    public HashSet<IMethodSymbol> MockMethods { get; } = new(SymbolEqualityComparer.Default);
-    public HashSet<IPropertySymbol> MockProperties { get; } = new(SymbolEqualityComparer.Default);
-    public HashSet<IFieldSymbol> MockFields { get; } = new(SymbolEqualityComparer.Default);
+    public HashSet<IMethodSymbol> MockMethods { get; } = new(SymbolSignatureComparer.Default);
+    public HashSet<IPropertySymbol> MockProperties { get; } = new(SymbolSignatureComparer.Default);
+    public HashSet<IFieldSymbol> MockFields { get; } = new(SymbolSignatureComparer.Default);
     
     public HashSet<IMethodSymbol> MockMethodsSignature { get; } = new(SymbolSignatureComparer.Default);
     public HashSet<IPropertySymbol> MockPropertiesSignature { get; } = new(SymbolSignatureComparer.Default);
     public HashSet<IFieldSymbol> MockFieldsSignature { get; } = new(SymbolSignatureComparer.Default);
     
-    public HashSet<INamedTypeSymbol> MockClasses { get; } = new(SymbolEqualityComparer.Default);
+    public HashSet<INamedTypeSymbol> MockClasses { get; } = new(SymbolSignatureComparer.Default);
     public HashSet<IMethodSymbol> MockClassConstructors { get; } = new(SymbolSignatureComparer.Default);
-    public HashSet<INamedTypeSymbol> IncludedBuilders { get; } = new(SymbolEqualityComparer.Default);
+    public HashSet<INamedTypeSymbol> IncludedBuilders { get; } = new(SymbolSignatureComparer.Default);
 
     /// <summary>
     /// Maps a symbol to its unique name in the dependencies interface.
     /// </summary>
-    public Dictionary<ISymbol, string> DependencyMemberNames { get; } = new(SymbolEqualityComparer.Default);
+    public Dictionary<ISymbol, string> DependencyMemberNames { get; } = new(SymbolSignatureComparer.Default);
 
     public string DependenciesInterfaceName { get; set; } = string.Empty;
     public string DependenciesFieldName { get; set; } = string.Empty;
