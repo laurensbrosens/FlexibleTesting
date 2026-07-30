@@ -195,7 +195,7 @@ public class FlexibleTestingRewriter(SemanticModel semanticModel, FlexibleTestin
         var containingType = constructor?.ContainingType;
         if (containingType != null && instructions.MockClasses.Contains(containingType))
         {
-            var dependencyName = containingType.Name;
+            var dependencyName = instructions.DependencyMemberNames[containingType];
             var arguments = node.ArgumentList?.Arguments.Select(a => a.Expression) ?? Enumerable.Empty<ExpressionSyntax>();
             return generator
                 .InvocationExpression(

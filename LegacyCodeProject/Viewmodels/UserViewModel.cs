@@ -15,6 +15,8 @@ public partial class UserViewModel<T> : UserViewModelBase
 
     public string Token { get; set; }
     public DateTime Now {  get; set; }
+    public DateTime FirstClock => LegacyCodeProject.Core.First.Clock.Now;
+    public DateTime SecondClock => LegacyCodeProject.Core.Second.Clock.Now;
 
     protected void GenericMethod<TMethod>(TMethod value)
     {

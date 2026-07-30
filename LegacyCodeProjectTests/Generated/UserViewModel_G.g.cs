@@ -18,6 +18,8 @@ public partial class UserViewModel_G<T> : UserViewModelBase_G
 
     public string Token { get; set; }
     public DateTime Now { get; set; }
+    public DateTime FirstClock => _dependencies.LegacyCodeProject_Core_First_Clock_Now;
+    public DateTime SecondClock => _dependencies.LegacyCodeProject_Core_Second_Clock_Now;
 
     public void GenericMethod<TMethod>(TMethod value)
     {
@@ -34,6 +36,10 @@ public interface IAutoUserViewModelDependencies
     DateTime DateTime_Now { get; set; }
 
     DateTime Now { get; set; }
+
+    DateTime LegacyCodeProject_Core_First_Clock_Now { get; set; }
+
+    DateTime LegacyCodeProject_Core_Second_Clock_Now { get; set; }
 }
 
 public partial class UserViewModel_G<T>

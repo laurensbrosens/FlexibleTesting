@@ -110,4 +110,22 @@ public class UserViewModelTests
 
         Assert.That(vm.Now, Is.EqualTo(newDate));
     }
+
+    [Test]
+    public void StaticDependencies_WithSameTypeAndMemberNames_UseQualifiedNames()
+    {
+        var data = new SomeDataObject();
+        var deps = Substitute.For<IAutoUserViewModelDependencies>();
+        var baseDeps = Substitute.For<IAutoUserViewModelBaseDependencies>();
+        var coreDeps = Substitute.For<IAutoViewModelCoreDependencies>();
+        var firstDate = new DateTime(2026, 3, 3);
+        var secondDate = new DateTime(2026, 4, 4);
+        deps.LegacyCodeProject_Core_First_Clock_Now = firstDate;
+        deps.LegacyCodeProject_Core_Second_Clock_Now = secondDate;
+
+        var vm = new UserViewModel_G<string>(data, deps, baseDeps, coreDeps);
+
+        Assert.That(vm.FirstClock, Is.EqualTo(firstDate));
+        Assert.That(vm.SecondClock, Is.EqualTo(secondDate));
+    }
 }

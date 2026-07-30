@@ -200,8 +200,55 @@ public class FlexibleTestingInstructionsCreator
         MapMockClassConstructors(instructions, instructions.Parts.Select(p => p.Syntax), targetDocumentForCompilation);
         
         MergeIncludedInstructions(instructions);
+        NormalizeDependencyMemberNames(instructions);
 
         return instructions;
+    }
+
+    private static void NormalizeDependencyMemberNames(FlexibleTestingInstructions instructions)
+    {
+        foreach (var group in instructions.DependencyMemberNames.Keys.GroupBy(GetSimpleDependencyMemberName, StringComparer.Ordinal))
+        {
+            var dependencyMemberName = group.Count() == 1 ? group.Key : null;
+
+            foreach (var symbol in group)
+            {
+                instructions.DependencyMemberNames[symbol] = dependencyMemberName
+                    ?? GetQualifiedDependencyMemberName(symbol);
+            }
+        }
+    }
+
+    private static string GetSimpleDependencyMemberName(ISymbol symbol)
+    {
+        if (symbol is INamedTypeSymbol namedType)
+            return namedType.Name;
+
+        if (symbol.IsStatic && symbol.ContainingType != null)
+            return $"{symbol.ContainingType.Name}_{symbol.Name}";
+
+        return symbol.Name;
+    }
+
+    private static string GetQualifiedDependencyMemberName(ISymbol symbol)
+    {
+        var symbolPath = symbol is INamedTypeSymbol namedType
+            ? namedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+            : $"{symbol.ContainingType?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}_{symbol.Name}";
+
+        return ToIdentifier(symbolPath);
+    }
+
+    private static string ToIdentifier(string value)
+    {
+        var identifier = value.Replace("global::", string.Empty);
+        var characters = identifier.Select(character => char.IsLetterOrDigit(character) || character == '_' ? character : '_').ToArray();
+        var result = new string(characters);
+
+        if (string.IsNullOrEmpty(result))
+            return "Dependency";
+
+        return char.IsLetter(result[0]) || result[0] == '_' ? result : $"_{result}";
     }
 
     private void MergeIncludedInstructions(FlexibleTestingInstructions instructions)
@@ -446,12 +493,7 @@ public class FlexibleTestingInstructionsCreator
             }
         }
 
-        string name = symbol.Name;
-        if (symbol.IsStatic && (symbol is IPropertySymbol || symbol is IMethodSymbol || symbol is IFieldSymbol))
-        {
-            name = $"{symbol.ContainingType.Name}_{symbol.Name}";
-        }
-        instructions.DependencyMemberNames[symbol] = name;
+        instructions.DependencyMemberNames[symbol] = GetSimpleDependencyMemberName(symbol);
     }
 
     private void AddClassMock(FlexibleTestingInstructions instructions, IMethodSymbol methodSymbol, InvocationExpressionSyntax invocation)
@@ -467,7 +509,7 @@ public class FlexibleTestingInstructionsCreator
             return;
 
         instructions.MockClasses.Add(legacyMockType);
-        instructions.DependencyMemberNames[legacyMockType] = legacyMockType.Name;
+        instructions.DependencyMemberNames[legacyMockType] = GetSimpleDependencyMemberName(legacyMockType);
     }
 
     private void MapMockClassConstructors(

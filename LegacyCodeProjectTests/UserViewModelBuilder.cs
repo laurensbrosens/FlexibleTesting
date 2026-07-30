@@ -13,6 +13,8 @@ internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewMod
         Overwrites.Mock(() => Guid.NewGuid());
         Overwrites.Mock(() => DateTime.Now);
         Overwrites.Mock(() => Now);
+        Overwrites.Mock(() => LegacyCodeProject.Core.First.Clock.Now);
+        Overwrites.Mock(() => LegacyCodeProject.Core.Second.Clock.Now);
         Overwrites.RecursiveMockInheritance();
         Overwrites.MakePublic<Action<int>>(GenericMethod);
     }

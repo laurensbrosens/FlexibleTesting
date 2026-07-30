@@ -38,6 +38,7 @@ internal sealed class DependencyInterfaceGenerator : IDependencyInterfaceGenerat
             .SelectMany(mockedTypeSymbol =>
         {
             var mockClassInterfaceName = _namePolicy.GetMockClassInterfaceName(mockedTypeSymbol.Name);
+            var dependencyMemberName = instructions.DependencyMemberNames[mockedTypeSymbol];
             return instructions.MockClassConstructors
                 .Where(constructorSymbol => SymbolSignatureComparer.Default.Equals(constructorSymbol.ContainingType, mockedTypeSymbol))
                 .OrderBy(constructorSymbol => constructorSymbol.Parameters.Length)
@@ -47,7 +48,7 @@ internal sealed class DependencyInterfaceGenerator : IDependencyInterfaceGenerat
                             syntaxGenerator,
                             constructorSymbol,
                             mockClassInterfaceName,
-                            mockedTypeSymbol.Name
+                            dependencyMemberName
                         )
                 );
         });
@@ -154,7 +155,7 @@ internal sealed class DependencyInterfaceGenerator : IDependencyInterfaceGenerat
         SyntaxGenerator syntaxGenerator,
         IMethodSymbol constructorSymbol,
         string mockClassInterfaceName,
-        string mockedTypeName
+        string dependencyMemberName
     )
     {
         var parameterDeclarations = constructorSymbol.Parameters.Select(
@@ -162,7 +163,7 @@ internal sealed class DependencyInterfaceGenerator : IDependencyInterfaceGenerat
         );
         var constructorDeclaration = (MethodDeclarationSyntax)
             syntaxGenerator.MethodDeclaration(
-                mockedTypeName,
+                dependencyMemberName,
                 parameters: parameterDeclarations,
                 returnType: SyntaxFactory.ParseTypeName(mockClassInterfaceName),
                 accessibility: Accessibility.Public
