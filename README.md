@@ -81,6 +81,15 @@ Reuse common overwrite rules across multiple builders.
 Overwrites.Include<BaseBuilder>();
 ```
 
+The framework also provides reusable instruction templates. These configure generator seams only; test-specific return values and assertions remain in the unit tests.
+
+```csharp
+using FlexibleTestingDomain.Templates;
+
+Overwrites.Include<CommonDotNetGeneratorInstructions>();
+// Adds seams for DateTime.Now, DateTime.UtcNow, and Guid.NewGuid.
+```
+
 ### Recursive Instructions
 Create complex inheritance hierarchies using one builder file for each class in the chain. Each generated class becomes a full copy of its source, and the derived generated class inherits from the generated base copy.
 
