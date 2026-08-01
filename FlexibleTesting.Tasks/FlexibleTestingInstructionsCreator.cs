@@ -1,4 +1,5 @@
 using FlexibleTestingDomain;
+using FlexibleTestingDomain.Templates;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
 using Microsoft.CodeAnalysis;
@@ -199,7 +200,7 @@ public class FlexibleTestingInstructionsCreator
         MapMethodsToLegacy(instructions);
         MapMockClassConstructors(instructions, instructions.Parts.Select(p => p.Syntax), targetDocumentForCompilation);
         
-        MergeIncludedInstructions(instructions);
+        MergeIncludedInstructions(instructions, targetCompilation);
         NormalizeDependencyMemberNames(instructions);
 
         return instructions;
@@ -251,7 +252,7 @@ public class FlexibleTestingInstructionsCreator
         return char.IsLetter(result[0]) || result[0] == '_' ? result : $"_{result}";
     }
 
-    private void MergeIncludedInstructions(FlexibleTestingInstructions instructions)
+    private void MergeIncludedInstructions(FlexibleTestingInstructions instructions, Compilation targetCompilation)
     {
         var visited = new HashSet<INamedTypeSymbol>(SymbolSignatureComparer.Default);
         var queue = new Queue<INamedTypeSymbol>(instructions.IncludedBuilders);
@@ -260,6 +261,9 @@ public class FlexibleTestingInstructionsCreator
         {
             var builderType = queue.Dequeue();
             if (!visited.Add(builderType)) continue;
+
+            if (TryApplyFrameworkTemplate(builderType, instructions, targetCompilation))
+                continue;
 
             var syntaxRef = builderType.DeclaringSyntaxReferences.FirstOrDefault();
             if (syntaxRef?.GetSyntax() is ClassDeclarationSyntax builderNode)
@@ -284,6 +288,66 @@ public class FlexibleTestingInstructionsCreator
                 }
             }
         }
+    }
+
+    private bool TryApplyFrameworkTemplate(
+        INamedTypeSymbol templateType,
+        FlexibleTestingInstructions instructions,
+        Compilation targetCompilation
+    )
+    {
+        var isTemplate = templateType.GetAttributes().Any(attribute =>
+            attribute.AttributeClass?.IsEqualToSymbol(
+                _testCompilation.GetTypeByMetadataName(typeof(GeneratorInstructionsTemplateAttribute).FullName!)
+            ) ?? false
+        );
+        if (!isTemplate)
+            return false;
+
+        if (!templateType.IsEqualToSymbol(_testCompilation.GetTypeByMetadataName(typeof(CommonDotNetGeneratorInstructions).FullName!)))
+            throw new InvalidOperationException($"Framework instruction template '{templateType.ToDisplayString()}' is not registered.");
+
+        AddFrameworkMockMember(
+            instructions,
+            targetCompilation
+                .GetTypeByMetadataName("System.DateTime")?
+                .GetMembers(nameof(DateTime.Now))
+                .OfType<IPropertySymbol>()
+                .FirstOrDefault()
+                ?? throw new InvalidOperationException("Could not resolve System.DateTime.Now in the target compilation.")
+        );
+        AddFrameworkMockMember(
+            instructions,
+            targetCompilation
+                .GetTypeByMetadataName("System.DateTime")?
+                .GetMembers(nameof(DateTime.UtcNow))
+                .OfType<IPropertySymbol>()
+                .FirstOrDefault()
+                ?? throw new InvalidOperationException("Could not resolve System.DateTime.UtcNow in the target compilation.")
+        );
+        AddFrameworkMockMember(
+            instructions,
+            targetCompilation
+                .GetTypeByMetadataName("System.Guid")?
+                .GetMembers(nameof(Guid.NewGuid))
+                .OfType<IMethodSymbol>()
+                .FirstOrDefault(method => method.Parameters.Length == 0)
+                ?? throw new InvalidOperationException("Could not resolve System.Guid.NewGuid in the target compilation.")
+        );
+
+        return true;
+    }
+
+    private static void AddFrameworkMockMember(FlexibleTestingInstructions instructions, ISymbol symbol)
+    {
+        if (symbol is IMethodSymbol method)
+            instructions.MockMethods.Add(method);
+        else if (symbol is IPropertySymbol property)
+            instructions.MockProperties.Add(property);
+        else if (symbol is IFieldSymbol field)
+            instructions.MockFields.Add(field);
+
+        instructions.DependencyMemberNames[symbol] = symbol.Name;
     }
 
     private (ClassDeclarationSyntax? node, Document? doc) TryDecompile(INamedTypeSymbol symbol)

@@ -1,4 +1,5 @@
 using FlexibleTestingDomain;
+using FlexibleTestingDomain.Templates;
 using LegacyCodeProject.Core;
 using LegacyCodeProject.Viewmodels;
 
@@ -10,8 +11,7 @@ internal class UserViewModelBuilder(SomeDataObject someDataObject) : UserViewMod
     public void Configure()
     {
         Overwrites.ForClass(typeof(UserViewModel<>));
-        Overwrites.Mock(() => Guid.NewGuid());
-        Overwrites.Mock(() => DateTime.Now);
+        Overwrites.Include<CommonDotNetGeneratorInstructions>();
         Overwrites.Mock(() => Now);
         Overwrites.Mock(() => LegacyCodeProject.Core.First.Clock.Now);
         Overwrites.Mock(() => LegacyCodeProject.Core.Second.Clock.Now);

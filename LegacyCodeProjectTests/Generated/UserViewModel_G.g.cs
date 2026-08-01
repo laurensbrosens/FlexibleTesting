@@ -33,13 +33,15 @@ public partial class UserViewModel_G<T> : UserViewModelBase_G
 public interface IAutoUserViewModelDependencies
 {
     Guid Guid_NewGuid();
-    DateTime DateTime_Now { get; set; }
-
     DateTime Now { get; set; }
 
     DateTime LegacyCodeProject_Core_First_Clock_Now { get; set; }
 
     DateTime LegacyCodeProject_Core_Second_Clock_Now { get; set; }
+
+    DateTime DateTime_Now { get; set; }
+
+    DateTime DateTime_UtcNow { get; set; }
 }
 
 public partial class UserViewModel_G<T>
